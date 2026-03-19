@@ -1,0 +1,61 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "civicledger"
+version = "0.1.0"
+description = "US financial intelligence from public domain sources — SEC EDGAR, FRED, and congressional disclosures"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [{ name = "StockBeat", email = "admin@stockbeat.app" }]
+keywords = ["sec", "edgar", "finance", "government", "public-domain", "congressional-trades", "insider-trading", "13f"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Financial and Insurance Industry",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business :: Financial",
+]
+dependencies = [
+    "httpx>=0.27",
+    "pydantic>=2.0",
+    "loguru>=0.7",
+    "aiosqlite>=0.20",
+    "sqlalchemy[asyncio]>=2.0",
+    "beautifulsoup4>=4.12",
+    "lxml>=5.0",
+    "edgartools>=5.0",
+    "pandas>=2.0",
+]
+
+[project.optional-dependencies]
+server = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.30",
+    "redis>=5.0",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.4",
+]
+
+[project.scripts]
+civicledger = "civicledger.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/sakzgupzzz/civicledger"
+Repository = "https://github.com/sakzgupzzz/civicledger"
+Issues = "https://github.com/sakzgupzzz/civicledger/issues"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
