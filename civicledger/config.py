@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     # Redis (optional — works without it, just no caching)
     redis_url: Optional[str] = None
 
+    # DynamoDB
+    dynamodb_table: str = "civicledger"
+    dynamodb_region: str = "us-east-1"
+
     # Rate limiting
     edgar_rate_limit: float = 0.12  # seconds between requests (≈8/sec, under 10/sec limit)
 

@@ -1,7 +1,8 @@
 """CivicLedger MCP Server — expose US financial data as MCP tools.
 
-Wraps all CivicLedger async modules (SEC EDGAR, FRED, congressional trades)
-as MCP tools that any AI agent can call via the Model Context Protocol.
+Wraps all CivicLedger data sources as MCP tools. When DynamoDB is populated
+(via the refresh pipeline), tools read from the database for instant responses.
+Falls back to live API fetches if DynamoDB is empty or unavailable.
 
 Supports:
   - stdio transport (local use with Claude Desktop)
@@ -20,6 +21,7 @@ import traceback
 from datetime import date, timedelta
 from typing import Any
 
+from loguru import logger
 from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP(
@@ -52,6 +54,29 @@ def _default_to_date() -> str:
     return date.today().isoformat()
 
 
+async def _try_dynamo_first(fetch_from_dynamo, fetch_live, source_name: str):
+    """Try DynamoDB first, fall back to live fetch.
+
+    Args:
+        fetch_from_dynamo: async callable that returns data from DynamoDB (or None/empty)
+        fetch_live: async callable that returns data from live API
+        source_name: human-readable name for logging
+
+    Returns the data from whichever source succeeds.
+    """
+    try:
+        from civicledger import storage
+        data = await fetch_from_dynamo()
+        if data:
+            logger.debug(f"{source_name}: served from DynamoDB ({len(data) if isinstance(data, (list, dict)) else '?'} items)")
+            return data
+        logger.debug(f"{source_name}: DynamoDB empty, falling back to live fetch")
+    except Exception as e:
+        logger.debug(f"{source_name}: DynamoDB unavailable ({e}), falling back to live fetch")
+
+    return await fetch_live()
+
+
 # ---------------------------------------------------------------------------
 # Tool 1: Fundamentals
 # ---------------------------------------------------------------------------
@@ -73,34 +98,71 @@ async def get_fundamentals(ticker: str | None = None) -> str:
                 overwhelming output).
     """
     try:
-        from civicledger.edgar.fundamentals import fetch_fundamentals
-
-        data = await fetch_fundamentals()
-
-        if not data:
-            return "No fundamentals data available. The EDGAR XBRL API may be temporarily unavailable."
-
         if ticker:
             ticker_upper = ticker.upper()
-            if ticker_upper in data:
+
+            # Try DynamoDB first for single ticker
+            async def _from_dynamo():
+                from civicledger import storage
+                return await storage.get_item(f"FUND#{ticker_upper}", "LATEST")
+
+            async def _from_live():
+                from civicledger.edgar.fundamentals import fetch_fundamentals
+                data = await fetch_fundamentals()
+                return data.get(ticker_upper) if data else None
+
+            data = await _try_dynamo_first(_from_dynamo, _from_live, f"fundamentals/{ticker_upper}")
+
+            if data:
                 return _format_result(
-                    {ticker_upper: data[ticker_upper]},
+                    {ticker_upper: data},
                     f"Fundamentals for {ticker_upper}",
                 )
             return f"No fundamentals data found for ticker '{ticker_upper}'. This ticker may not file with SEC EDGAR."
 
-        # Without a ticker, return summary (full dump would be megabytes)
-        sample_tickers = sorted(data.keys())[:20]
-        sample = {t: data[t] for t in sample_tickers}
-        return _format_result(
-            {
+        # No ticker — return summary
+        async def _summary_from_dynamo():
+            from civicledger import storage
+            meta = await storage.get_meta("fundamentals")
+            if meta and meta.get("count", 0) > 0:
+                # Fetch a small sample from GSI
+                sample_items = await storage.query_gsi("FUND", limit=20)
+                sample_data = {}
+                for item in sample_items:
+                    sk = item.pop("_sk", "")
+                    # SK is the ticker itself in GSI1SK
+                    sample_data[sk] = item
+                return {
+                    "total_tickers": meta["count"],
+                    "sample_tickers": sorted(sample_data.keys())[:20],
+                    "sample_data": sample_data,
+                    "note": "Pass a specific ticker to get_fundamentals(ticker='AAPL') for full data.",
+                    "last_refresh": meta.get("timestamp"),
+                }
+            return None
+
+        async def _summary_from_live():
+            from civicledger.edgar.fundamentals import fetch_fundamentals
+            data = await fetch_fundamentals()
+            if not data:
+                return None
+            sample_tickers = sorted(data.keys())[:20]
+            sample = {t: data[t] for t in sample_tickers}
+            return {
                 "total_tickers": len(data),
                 "sample_tickers": sample_tickers,
                 "sample_data": sample,
                 "note": "Pass a specific ticker to get_fundamentals(ticker='AAPL') for full data.",
-            },
-            f"EDGAR XBRL fundamentals: {len(data)} tickers available",
-        )
+            }
+
+        data = await _try_dynamo_first(_summary_from_dynamo, _summary_from_live, "fundamentals/summary")
+
+        if data:
+            return _format_result(
+                data,
+                f"EDGAR XBRL fundamentals: {data.get('total_tickers', '?')} tickers available",
+            )
+        return "No fundamentals data available. The EDGAR XBRL API may be temporarily unavailable."
 
     except Exception as e:
         return f"Error fetching fundamentals: {e}\n{traceback.format_exc()}"
@@ -128,11 +190,27 @@ async def get_earnings_calendar(
         to_date: End date in YYYY-MM-DD format. Defaults to today.
     """
     try:
-        from civicledger.edgar.earnings import fetch_earnings
-
         fd = from_date or _default_from_date()
         td = to_date or _default_to_date()
-        data = await fetch_earnings(fd, td)
+
+        async def _from_dynamo():
+            from civicledger import storage
+            # Query by date prefix to get items in range
+            items = await storage.query("EARNINGS", sk_prefix=fd[:7])
+            # Filter to exact date range and strip internal keys
+            filtered = []
+            for item in items:
+                item.pop("_sk", None)
+                item_date = item.get("filing_date", "")
+                if fd <= item_date <= td:
+                    filtered.append(item)
+            return filtered if filtered else None
+
+        async def _from_live():
+            from civicledger.edgar.earnings import fetch_earnings
+            return await fetch_earnings(fd, td)
+
+        data = await _try_dynamo_first(_from_dynamo, _from_live, "earnings")
 
         if not data:
             return f"No earnings announcements found between {fd} and {td}."
@@ -170,11 +248,27 @@ async def get_insider_trades(
         ticker: Optional — filter to a specific stock ticker (e.g., "TSLA").
     """
     try:
-        from civicledger.edgar.insider_trades import fetch_recent_insider_trades
-
         fd = from_date or _default_from_date()
         td = to_date or _default_to_date()
-        data = await fetch_recent_insider_trades(fd, td, ticker=ticker)
+
+        async def _from_dynamo():
+            from civicledger import storage
+            items = await storage.query("INSIDER", sk_prefix=fd[:7])
+            filtered = []
+            for item in items:
+                item.pop("_sk", None)
+                item_date = item.get("filing_date", "")
+                if fd <= item_date <= td:
+                    if ticker and item.get("ticker") != ticker.upper():
+                        continue
+                    filtered.append(item)
+            return filtered if filtered else None
+
+        async def _from_live():
+            from civicledger.edgar.insider_trades import fetch_recent_insider_trades
+            return await fetch_recent_insider_trades(fd, td, ticker=ticker)
+
+        data = await _try_dynamo_first(_from_dynamo, _from_live, "insider_trades")
 
         if not data:
             filter_msg = f" for {ticker.upper()}" if ticker else ""
@@ -211,6 +305,8 @@ async def get_insider_trades_detailed(
         limit: Maximum number of trades to return. Defaults to 50.
     """
     try:
+        # Detailed trades are per-ticker and require parsing Form 4 XML.
+        # Not practical to pre-fetch for all tickers, so this always goes live.
         from civicledger.edgar.insider_trades import fetch_insider_trades_detailed
 
         data = await fetch_insider_trades_detailed(ticker, limit=limit)
@@ -249,12 +345,28 @@ async def get_institutional_holdings(
         limit: Maximum number of holdings to return. Defaults to 100.
     """
     try:
-        from civicledger.edgar.institutional import fetch_holdings
+        # Try DynamoDB for known institutions
+        safe_name = manager.replace(" ", "").replace("#", "")
 
-        data = await fetch_holdings(manager, limit=limit)
+        async def _from_dynamo():
+            from civicledger import storage
+            return await storage.get_item(f"INST#{safe_name}", "LATEST")
+
+        async def _from_live():
+            from civicledger.edgar.institutional import fetch_holdings
+            return await fetch_holdings(manager, limit=limit)
+
+        data = await _try_dynamo_first(_from_dynamo, _from_live, f"institutional/{manager}")
+
+        if not data:
+            return f"No 13F holdings found for {manager}."
 
         if "error" in data:
             return f"Error: {data['error']}"
+
+        # Apply limit to holdings if from DynamoDB (may have stored more)
+        if "holdings" in data and len(data["holdings"]) > limit:
+            data["holdings"] = data["holdings"][:limit]
 
         return _format_result(
             data,
@@ -279,14 +391,34 @@ async def get_top_institutions() -> str:
     Technologies, Citadel, BlackRock, Vanguard, ARK Invest, Soros, and more.
 
     Note: This calls the SEC EDGAR API for each institution, so it may take
-    30-60 seconds to complete.
+    30-60 seconds to complete if not cached.
 
     Source: SEC EDGAR 13F-HR filings (public domain, no API key needed).
     """
     try:
-        from civicledger.edgar.institutional import fetch_top_institutions_summary
+        async def _from_dynamo():
+            from civicledger import storage
+            from civicledger.edgar.institutional import TOP_INSTITUTIONS
+            results = []
+            for name, cik in TOP_INSTITUTIONS:
+                safe_name = name.replace(" ", "").replace("#", "")
+                data = await storage.get_item(f"INST#{safe_name}", "LATEST")
+                if data and "error" not in data:
+                    results.append({
+                        "manager_name": name,
+                        "manager_cik": cik,
+                        "total_value_millions": data.get("total_value_millions"),
+                        "holdings_count": data.get("holdings_count"),
+                        "period": data.get("period"),
+                        "top_holdings": data.get("holdings", [])[:5],
+                    })
+            return results if results else None
 
-        data = await fetch_top_institutions_summary()
+        async def _from_live():
+            from civicledger.edgar.institutional import fetch_top_institutions_summary
+            return await fetch_top_institutions_summary()
+
+        data = await _try_dynamo_first(_from_dynamo, _from_live, "top_institutions")
 
         if not data:
             return "No institutional holdings data available."
@@ -327,11 +459,27 @@ async def get_material_events(
                      "7.01" (Reg FD disclosure), "8.01" (other events).
     """
     try:
-        from civicledger.edgar.material_events import fetch_material_events
-
         fd = from_date or _default_from_date()
         td = to_date or _default_to_date()
-        data = await fetch_material_events(fd, td, item_filter=item_filter)
+
+        async def _from_dynamo():
+            from civicledger import storage
+            items = await storage.query("MATERIAL", sk_prefix=fd[:7])
+            filtered = []
+            for item in items:
+                item.pop("_sk", None)
+                item_date = item.get("filing_date", "")
+                if fd <= item_date <= td:
+                    if item_filter and item_filter not in item.get("items", []):
+                        continue
+                    filtered.append(item)
+            return filtered if filtered else None
+
+        async def _from_live():
+            from civicledger.edgar.material_events import fetch_material_events
+            return await fetch_material_events(fd, td, item_filter=item_filter)
+
+        data = await _try_dynamo_first(_from_dynamo, _from_live, "material_events")
 
         if not data:
             filter_msg = f" (item {item_filter})" if item_filter else ""
@@ -369,10 +517,22 @@ async def get_congressional_trades(
         limit: Maximum results per chamber. Defaults to 200.
     """
     try:
-        from civicledger.congress.trades import fetch_all_congressional_trades
-
         yr = year or date.today().year
-        data = await fetch_all_congressional_trades(year=yr, limit=limit)
+
+        async def _from_dynamo():
+            from civicledger import storage
+            items = await storage.query("CONGRESS", sk_prefix=str(yr), limit=limit * 2)
+            cleaned = []
+            for item in items:
+                item.pop("_sk", None)
+                cleaned.append(item)
+            return cleaned if cleaned else None
+
+        async def _from_live():
+            from civicledger.congress.trades import fetch_all_congressional_trades
+            return await fetch_all_congressional_trades(year=yr, limit=limit)
+
+        data = await _try_dynamo_first(_from_dynamo, _from_live, f"congress/{yr}")
 
         if not data:
             return f"No congressional trades found for {yr}."
@@ -381,7 +541,7 @@ async def get_congressional_trades(
         house_count = sum(1 for t in data if t.get("chamber") == "house")
 
         return _format_result(
-            data,
+            data[:limit * 2],
             f"{len(data)} congressional trades for {yr} ({senate_count} Senate, {house_count} House)",
         )
 
@@ -417,11 +577,25 @@ async def get_economic_calendar(
         to_date: End date in YYYY-MM-DD format. Defaults to today.
     """
     try:
-        from civicledger.economic.fred import fetch_economic_events
-
         fd = from_date or _default_from_date()
         td = to_date or _default_to_date()
-        data = await fetch_economic_events(fd, td)
+
+        async def _from_dynamo():
+            from civicledger import storage
+            items = await storage.query("ECONOMIC", sk_prefix=fd[:7])
+            filtered = []
+            for item in items:
+                item.pop("_sk", None)
+                item_date = item.get("date", "")
+                if fd <= item_date <= td:
+                    filtered.append(item)
+            return filtered if filtered else None
+
+        async def _from_live():
+            from civicledger.economic.fred import fetch_economic_events
+            return await fetch_economic_events(fd, td)
+
+        data = await _try_dynamo_first(_from_dynamo, _from_live, "economic_events")
 
         if not data:
             return (

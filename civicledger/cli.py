@@ -6,10 +6,15 @@ Usage:
     civicledger refresh insider-trades --from 2026-03-01 --to 2026-03-07
     civicledger refresh congress --year 2026
     civicledger refresh events --from 2026-03-01 --to 2026-03-31
+    civicledger refresh material-events --from 2026-03-01 --to 2026-03-31
+    civicledger refresh institutional
     civicledger refresh all
     civicledger serve --port 8080
     civicledger mcp                       # start MCP server (stdio)
     civicledger mcp --transport sse       # start MCP server (SSE)
+
+When DynamoDB is configured (CIVICLEDGER_DYNAMODB_TABLE), refresh commands
+store data in DynamoDB. Otherwise they just print results to stdout.
 """
 
 import argparse
@@ -26,85 +31,146 @@ def _run(coro):
     return asyncio.run(coro)
 
 
+# ---------------------------------------------------------------------------
+# Refresh commands — DynamoDB-backed (new)
+# ---------------------------------------------------------------------------
+
 async def _refresh_fundamentals():
-    from civicledger.edgar.fundamentals import fetch_fundamentals
-    data = await fetch_fundamentals()
-    print(f"Fetched fundamentals for {len(data)} tickers")
-    # Show sample
-    for ticker in list(data.keys())[:5]:
-        metrics = data[ticker]
-        print(f"  {ticker}: revenue={metrics.get('revenue')}, margin={metrics.get('profit_margin')}")
+    """Refresh fundamentals and store in DynamoDB."""
+    try:
+        from civicledger.refresh import refresh_fundamentals
+        count = await refresh_fundamentals()
+        print(f"Stored fundamentals for {count} tickers in DynamoDB")
+    except Exception as e:
+        logger.warning(f"DynamoDB refresh failed, running live fetch only: {e}")
+        from civicledger.edgar.fundamentals import fetch_fundamentals
+        data = await fetch_fundamentals()
+        print(f"Fetched fundamentals for {len(data)} tickers (not stored — DynamoDB unavailable)")
+        for ticker in list(data.keys())[:5]:
+            metrics = data[ticker]
+            print(f"  {ticker}: revenue={metrics.get('revenue')}, margin={metrics.get('profit_margin')}")
 
 
 async def _refresh_earnings(from_date: str, to_date: str):
-    from civicledger.edgar.earnings import fetch_earnings
-    data = await fetch_earnings(from_date, to_date)
-    print(f"Fetched {len(data)} earnings announcements")
-    for e in data[:10]:
-        print(f"  {e['filing_date']} - {e['ticker']:>6} - {e['company']}")
+    try:
+        from civicledger.refresh import refresh_earnings
+        count = await refresh_earnings(from_date, to_date)
+        print(f"Stored {count} earnings announcements in DynamoDB")
+    except Exception as e:
+        logger.warning(f"DynamoDB refresh failed: {e}")
+        from civicledger.edgar.earnings import fetch_earnings
+        data = await fetch_earnings(from_date, to_date)
+        print(f"Fetched {len(data)} earnings announcements (not stored)")
+        for entry in data[:10]:
+            print(f"  {entry['filing_date']} - {entry['ticker']:>6} - {entry['company']}")
 
 
 async def _refresh_insider_trades(from_date: str, to_date: str):
-    from civicledger.edgar.insider_trades import fetch_recent_insider_trades
-    data = await fetch_recent_insider_trades(from_date, to_date)
-    print(f"Fetched {len(data)} insider trade filings")
-    for t in data[:10]:
-        print(f"  {t['filing_date']} - {t['ticker']:>6} - {t['insider_name']}")
+    try:
+        from civicledger.refresh import refresh_insider_trades
+        count = await refresh_insider_trades(from_date, to_date)
+        print(f"Stored {count} insider trade filings in DynamoDB")
+    except Exception as e:
+        logger.warning(f"DynamoDB refresh failed: {e}")
+        from civicledger.edgar.insider_trades import fetch_recent_insider_trades
+        data = await fetch_recent_insider_trades(from_date, to_date)
+        print(f"Fetched {len(data)} insider trade filings (not stored)")
+        for t in data[:10]:
+            print(f"  {t['filing_date']} - {t.get('ticker', '?'):>6} - {t.get('insider_name', '?')}")
 
 
 async def _refresh_congress(year: int):
-    from civicledger.congress.trades import fetch_all_congressional_trades
-    data = await fetch_all_congressional_trades(year=year)
-    print(f"Fetched {len(data)} congressional trades")
-    for t in data[:10]:
-        print(f"  {t['disclosure_date']} - {t['politician']} ({t['chamber']})")
+    try:
+        from civicledger.refresh import refresh_congressional_trades
+        count = await refresh_congressional_trades(year)
+        print(f"Stored {count} congressional trades in DynamoDB")
+    except Exception as e:
+        logger.warning(f"DynamoDB refresh failed: {e}")
+        from civicledger.congress.trades import fetch_all_congressional_trades
+        data = await fetch_all_congressional_trades(year=year)
+        print(f"Fetched {len(data)} congressional trades (not stored)")
+        for t in data[:10]:
+            print(f"  {t['disclosure_date']} - {t['politician']} ({t['chamber']})")
 
 
 async def _refresh_events(from_date: str, to_date: str):
-    from civicledger.economic.fred import fetch_economic_events
-    data = await fetch_economic_events(from_date, to_date)
-    print(f"Fetched {len(data)} economic events")
-    for e in data[:10]:
-        print(f"  {e['date']} - {e['name']} ({e['impact']})")
+    try:
+        from civicledger.refresh import refresh_economic_events
+        count = await refresh_economic_events(from_date, to_date)
+        print(f"Stored {count} economic events in DynamoDB")
+    except Exception as e:
+        logger.warning(f"DynamoDB refresh failed: {e}")
+        from civicledger.economic.fred import fetch_economic_events
+        data = await fetch_economic_events(from_date, to_date)
+        print(f"Fetched {len(data)} economic events (not stored)")
+        for entry in data[:10]:
+            print(f"  {entry['date']} - {entry['name']} ({entry['impact']})")
 
 
 async def _refresh_material_events(from_date: str, to_date: str):
-    from civicledger.edgar.material_events import fetch_material_events
-    data = await fetch_material_events(from_date, to_date)
-    print(f"Fetched {len(data)} material events")
-    for e in data[:10]:
-        labels = ", ".join(e.get("item_labels", []))
-        print(f"  {e['filing_date']} - {e.get('ticker', '?'):>6} - {labels}")
+    try:
+        from civicledger.refresh import refresh_material_events
+        count = await refresh_material_events(from_date, to_date)
+        print(f"Stored {count} material events in DynamoDB")
+    except Exception as e:
+        logger.warning(f"DynamoDB refresh failed: {e}")
+        from civicledger.edgar.material_events import fetch_material_events
+        data = await fetch_material_events(from_date, to_date)
+        print(f"Fetched {len(data)} material events (not stored)")
+        for entry in data[:10]:
+            labels = ", ".join(entry.get("item_labels", []))
+            print(f"  {entry['filing_date']} - {entry.get('ticker', '?'):>6} - {labels}")
+
+
+async def _refresh_institutional():
+    try:
+        from civicledger.refresh import refresh_institutional_holdings
+        count = await refresh_institutional_holdings()
+        print(f"Stored holdings for {count} institutions in DynamoDB")
+    except Exception as e:
+        logger.warning(f"DynamoDB refresh failed: {e}")
+        from civicledger.edgar.institutional import fetch_top_institutions_summary
+        data = await fetch_top_institutions_summary()
+        print(f"Fetched {len(data)} institutions (not stored)")
+        for inst in data:
+            print(f"  {inst['manager_name']}: ${inst.get('total_value_millions', '?')}M")
 
 
 async def _refresh_all(from_date: str, to_date: str, year: int):
     print("=== Refreshing all data sources ===\n")
 
-    print("--- Fundamentals (EDGAR XBRL) ---")
-    await _refresh_fundamentals()
-    print()
-
-    print("--- Earnings Calendar (EDGAR 8-K) ---")
-    await _refresh_earnings(from_date, to_date)
-    print()
-
-    print("--- Insider Trades (EDGAR Form 4) ---")
-    await _refresh_insider_trades(from_date, to_date)
-    print()
-
-    print("--- Congressional Trades ---")
-    await _refresh_congress(year)
-    print()
-
-    print("--- Economic Events (FRED) ---")
-    await _refresh_events(from_date, to_date)
-    print()
-
-    print("--- Material Events (EDGAR 8-K) ---")
-    await _refresh_material_events(from_date, to_date)
-    print()
-
-    print("=== All refreshes complete ===")
+    try:
+        from civicledger.refresh import refresh_all
+        results = await refresh_all(from_date, to_date, year)
+        print("\n=== Refresh Results ===")
+        for source, count in results.items():
+            print(f"  {source}: {count} items")
+        total = sum(results.values())
+        print(f"\nTotal: {total} items stored in DynamoDB")
+    except Exception as e:
+        logger.warning(f"DynamoDB refresh_all failed ({e}), running individual fetches...")
+        print("--- Fundamentals (EDGAR XBRL) ---")
+        await _refresh_fundamentals()
+        print()
+        print("--- Earnings Calendar (EDGAR 8-K) ---")
+        await _refresh_earnings(from_date, to_date)
+        print()
+        print("--- Insider Trades (EDGAR Form 4) ---")
+        await _refresh_insider_trades(from_date, to_date)
+        print()
+        print("--- Congressional Trades ---")
+        await _refresh_congress(year)
+        print()
+        print("--- Economic Events (FRED) ---")
+        await _refresh_events(from_date, to_date)
+        print()
+        print("--- Material Events (EDGAR 8-K) ---")
+        await _refresh_material_events(from_date, to_date)
+        print()
+        print("--- Institutional Holdings (13F) ---")
+        await _refresh_institutional()
+        print()
+        print("=== All refreshes complete ===")
 
 
 def main():
@@ -118,7 +184,7 @@ def main():
     refresh_parser = subparsers.add_parser("refresh", help="Refresh data from public sources")
     refresh_parser.add_argument(
         "source",
-        choices=["fundamentals", "earnings", "insider-trades", "congress", "events", "material-events", "all"],
+        choices=["fundamentals", "earnings", "insider-trades", "congress", "events", "material-events", "institutional", "all"],
         help="Data source to refresh",
     )
     refresh_parser.add_argument("--from", dest="from_date", default=None, help="Start date (YYYY-MM-DD)")
@@ -165,6 +231,8 @@ def main():
             _run(_refresh_events(from_date, to_date))
         elif args.source == "material-events":
             _run(_refresh_material_events(from_date, to_date))
+        elif args.source == "institutional":
+            _run(_refresh_institutional())
         elif args.source == "all":
             _run(_refresh_all(from_date, to_date, year))
 

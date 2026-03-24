@@ -32,6 +32,7 @@ dependencies = [
     "edgartools>=5.0",
     "pandas>=2.0",
     "mcp[cli]>=1.0",
+    "boto3>=1.35",
 ]
 
 [project.optional-dependencies]

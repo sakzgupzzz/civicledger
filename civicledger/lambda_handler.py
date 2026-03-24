@@ -5,7 +5,7 @@ Also handles EventBridge scheduled invocations for data refresh.
 
 Architecture:
   - Lambda Function URL (streaming) -> this handler -> MCP SSE transport
-  - EventBridge rule -> this handler -> CLI refresh commands
+  - EventBridge rule -> this handler -> refresh pipeline -> DynamoDB
   - GET /health -> health check
   - GET /sse -> SSE endpoint for MCP session initialization
   - POST /message -> MCP message endpoint (JSON-RPC over HTTP)
@@ -35,6 +35,7 @@ def _health_response():
             "status": "ok",
             "version": "0.1.0",
             "runtime": "aws-lambda",
+            "storage": "dynamodb",
             "sources": ["SEC EDGAR", "FRED", "Senate eFD", "House Clerk"],
         }),
     }
@@ -45,14 +46,24 @@ def _health_response():
 # ---------------------------------------------------------------------------
 
 async def _run_refresh(command: str):
-    """Run a CLI refresh command inside Lambda.
+    """Run a refresh command inside Lambda.
+
+    Uses the new refresh module which fetches from live APIs and stores
+    results in DynamoDB. MCP tools then read from DynamoDB.
 
     Args:
-        command: One of "fundamentals", "all", etc.
+        command: One of "fundamentals", "all", "earnings", "insider-trades",
+                 "material-events", "congress", "economic", "institutional".
     """
-    from civicledger.cli import (
-        _refresh_all,
-        _refresh_fundamentals,
+    from civicledger.refresh import (
+        refresh_all,
+        refresh_fundamentals,
+        refresh_earnings,
+        refresh_insider_trades,
+        refresh_material_events,
+        refresh_congressional_trades,
+        refresh_economic_events,
+        refresh_institutional_holdings,
     )
 
     today = date.today()
@@ -61,9 +72,29 @@ async def _run_refresh(command: str):
     year = today.year
 
     if command == "fundamentals":
-        await _refresh_fundamentals()
+        count = await refresh_fundamentals()
+        logger.info(f"Fundamentals refresh: {count} tickers")
+    elif command == "earnings":
+        count = await refresh_earnings(from_date, to_date)
+        logger.info(f"Earnings refresh: {count} items")
+    elif command == "insider-trades":
+        count = await refresh_insider_trades(from_date, to_date)
+        logger.info(f"Insider trades refresh: {count} items")
+    elif command == "material-events":
+        count = await refresh_material_events(from_date, to_date)
+        logger.info(f"Material events refresh: {count} items")
+    elif command == "congress":
+        count = await refresh_congressional_trades(year)
+        logger.info(f"Congressional trades refresh: {count} items")
+    elif command == "economic":
+        count = await refresh_economic_events(from_date, to_date)
+        logger.info(f"Economic events refresh: {count} items")
+    elif command == "institutional":
+        count = await refresh_institutional_holdings()
+        logger.info(f"Institutional holdings refresh: {count} institutions")
     elif command == "all":
-        await _refresh_all(from_date, to_date, year)
+        results = await refresh_all(from_date, to_date, year)
+        logger.info(f"Full refresh results: {results}")
     else:
         logger.warning(f"Unknown refresh command: {command}")
 
@@ -255,7 +286,7 @@ def handler(event, context):
     """AWS Lambda handler.
 
     Dispatches to:
-    1. EventBridge scheduled events -> data refresh
+    1. EventBridge scheduled events -> data refresh -> DynamoDB
     2. Lambda Function URL requests -> MCP protocol / health checks
     """
     # EventBridge scheduled events have a "source" field

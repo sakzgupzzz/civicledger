@@ -28,19 +28,22 @@ async def edgar_get(
     """
     settings = get_settings()
     url = f"{base}{path}"
-    headers = {"User-Agent": settings.edgar_identity}
+    headers = {
+        "User-Agent": settings.edgar_identity,
+        "Accept": "application/json",
+    }
 
     await asyncio.sleep(settings.edgar_rate_limit)
 
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
             resp = await client.get(url, params=params, headers=headers)
-            if resp.status_code == 404:
+            if resp.status_code != 200:
+                logger.warning(f"EDGAR {resp.status_code}: {url} — {resp.text[:300]}")
                 return None
-            resp.raise_for_status()
             return resp.json()
     except Exception as e:
-        logger.debug(f"EDGAR request failed: {url} — {e}")
+        logger.warning(f"EDGAR request failed: {url} — {type(e).__name__}: {e}")
         return None
 
 
@@ -77,7 +80,7 @@ async def get_ticker_cik_map() -> Dict[str, int]:
 
     Returns dict mapping uppercase ticker to CIK integer.
     """
-    data = await edgar_get("/files/company_tickers.json")
+    data = await edgar_get("/files/company_tickers.json", base="https://www.sec.gov")
     if not data:
         return {}
 

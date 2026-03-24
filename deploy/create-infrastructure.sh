@@ -3,10 +3,11 @@
 #
 # Creates:
 #   1. ECR repository
-#   2. IAM role for Lambda execution
-#   3. Lambda function (placeholder — image updated by build-and-push.sh)
-#   4. Lambda Function URL (for MCP SSE transport)
-#   5. EventBridge rules for scheduled data refresh
+#   2. DynamoDB table (single-table design)
+#   3. IAM role for Lambda execution (with DynamoDB permissions)
+#   4. Lambda function (placeholder — image updated by build-and-push.sh)
+#   5. Lambda Function URL (for MCP SSE transport)
+#   6. EventBridge rules for scheduled data refresh
 #
 # Usage:
 #   ./deploy/create-infrastructure.sh
@@ -28,6 +29,7 @@ LAMBDA_FUNCTION_NAME="civicledger-mcp"
 LAMBDA_ROLE_NAME="civicledger-lambda-role"
 LAMBDA_MEMORY=1024
 LAMBDA_TIMEOUT=300
+DYNAMODB_TABLE_NAME="civicledger"
 
 # Environment variables for the Lambda function
 FRED_API_KEY="${CIVICLEDGER_FRED_API_KEY:-}"
@@ -83,7 +85,55 @@ aws ecr put-lifecycle-policy \
 echo ""
 
 # ---------------------------------------------------------------------------
-# 2. IAM Role for Lambda
+# 2. DynamoDB Table (single-table design)
+# ---------------------------------------------------------------------------
+echo "--- Creating DynamoDB table: ${DYNAMODB_TABLE_NAME} ---"
+
+if aws dynamodb describe-table \
+    --table-name "${DYNAMODB_TABLE_NAME}" \
+    --region "${AWS_REGION}" 2>/dev/null; then
+    echo "DynamoDB table already exists"
+else
+    aws dynamodb create-table \
+        --table-name "${DYNAMODB_TABLE_NAME}" \
+        --region "${AWS_REGION}" \
+        --attribute-definitions \
+            AttributeName=PK,AttributeType=S \
+            AttributeName=SK,AttributeType=S \
+            AttributeName=GSI1PK,AttributeType=S \
+            AttributeName=GSI1SK,AttributeType=S \
+        --key-schema \
+            AttributeName=PK,KeyType=HASH \
+            AttributeName=SK,KeyType=RANGE \
+        --global-secondary-indexes \
+            "[{
+                \"IndexName\": \"GSI1\",
+                \"KeySchema\": [
+                    {\"AttributeName\": \"GSI1PK\", \"KeyType\": \"HASH\"},
+                    {\"AttributeName\": \"GSI1SK\", \"KeyType\": \"RANGE\"}
+                ],
+                \"Projection\": {\"ProjectionType\": \"ALL\"}
+            }]" \
+        --billing-mode PAY_PER_REQUEST \
+        --tags Key=Project,Value=CivicLedger Key=Environment,Value=production
+
+    echo "Waiting for DynamoDB table to become active..."
+    aws dynamodb wait table-exists \
+        --table-name "${DYNAMODB_TABLE_NAME}" \
+        --region "${AWS_REGION}"
+
+    # Enable TTL for automatic expiry of old data
+    aws dynamodb update-time-to-live \
+        --table-name "${DYNAMODB_TABLE_NAME}" \
+        --region "${AWS_REGION}" \
+        --time-to-live-specification "Enabled=true,AttributeName=ttl"
+
+    echo "DynamoDB table created with TTL enabled on 'ttl' attribute"
+fi
+echo ""
+
+# ---------------------------------------------------------------------------
+# 3. IAM Role for Lambda
 # ---------------------------------------------------------------------------
 echo "--- Creating IAM role: ${LAMBDA_ROLE_NAME} ---"
 
@@ -114,6 +164,33 @@ aws iam attach-role-policy \
     --role-name "${LAMBDA_ROLE_NAME}" \
     --policy-arn "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole" 2>/dev/null || true
 
+# Create inline policy for DynamoDB access
+echo "--- Adding DynamoDB permissions to Lambda role ---"
+DYNAMODB_POLICY="{
+    \"Version\": \"2012-10-17\",
+    \"Statement\": [
+        {
+            \"Effect\": \"Allow\",
+            \"Action\": [
+                \"dynamodb:GetItem\",
+                \"dynamodb:PutItem\",
+                \"dynamodb:Query\",
+                \"dynamodb:BatchWriteItem\",
+                \"dynamodb:DescribeTable\"
+            ],
+            \"Resource\": [
+                \"arn:aws:dynamodb:${AWS_REGION}:${ACCOUNT_ID}:table/${DYNAMODB_TABLE_NAME}\",
+                \"arn:aws:dynamodb:${AWS_REGION}:${ACCOUNT_ID}:table/${DYNAMODB_TABLE_NAME}/index/*\"
+            ]
+        }
+    ]
+}"
+
+aws iam put-role-policy \
+    --role-name "${LAMBDA_ROLE_NAME}" \
+    --policy-name "civicledger-dynamodb-access" \
+    --policy-document "${DYNAMODB_POLICY}"
+
 ROLE_ARN=$(aws iam get-role \
     --role-name "${LAMBDA_ROLE_NAME}" \
     --query "Role.Arn" --output text)
@@ -121,7 +198,7 @@ echo "Role ARN: ${ROLE_ARN}"
 echo ""
 
 # ---------------------------------------------------------------------------
-# 3. Lambda Function
+# 4. Lambda Function
 # ---------------------------------------------------------------------------
 echo "--- Creating Lambda function: ${LAMBDA_FUNCTION_NAME} ---"
 
@@ -133,7 +210,7 @@ if aws lambda get-function --function-name "${LAMBDA_FUNCTION_NAME}" --region "$
         --region "${AWS_REGION}" \
         --memory-size "${LAMBDA_MEMORY}" \
         --timeout "${LAMBDA_TIMEOUT}" \
-        --environment "Variables={CIVICLEDGER_FRED_API_KEY=${FRED_API_KEY},CIVICLEDGER_EDGAR_IDENTITY=${EDGAR_IDENTITY}}"
+        --environment "Variables={CIVICLEDGER_FRED_API_KEY=${FRED_API_KEY},CIVICLEDGER_EDGAR_IDENTITY=${EDGAR_IDENTITY},CIVICLEDGER_DYNAMODB_TABLE=${DYNAMODB_TABLE_NAME},CIVICLEDGER_DYNAMODB_REGION=${AWS_REGION}}"
 else
     # Need a placeholder image to create the function.
     # First push — build-and-push.sh will update this.
@@ -161,7 +238,7 @@ else
         --role "${ROLE_ARN}" \
         --memory-size "${LAMBDA_MEMORY}" \
         --timeout "${LAMBDA_TIMEOUT}" \
-        --environment "Variables={CIVICLEDGER_FRED_API_KEY=${FRED_API_KEY},CIVICLEDGER_EDGAR_IDENTITY=${EDGAR_IDENTITY}}" \
+        --environment "Variables={CIVICLEDGER_FRED_API_KEY=${FRED_API_KEY},CIVICLEDGER_EDGAR_IDENTITY=${EDGAR_IDENTITY},CIVICLEDGER_DYNAMODB_TABLE=${DYNAMODB_TABLE_NAME},CIVICLEDGER_DYNAMODB_REGION=${AWS_REGION}}" \
         --architectures x86_64
 
     echo "Waiting for function to become Active..."
@@ -172,7 +249,7 @@ fi
 echo ""
 
 # ---------------------------------------------------------------------------
-# 4. Lambda Function URL
+# 5. Lambda Function URL
 # ---------------------------------------------------------------------------
 echo "--- Creating Lambda Function URL ---"
 
@@ -215,7 +292,7 @@ echo "Function URL: ${FUNCTION_URL}"
 echo ""
 
 # ---------------------------------------------------------------------------
-# 5. EventBridge Rules for Scheduled Refresh
+# 6. EventBridge Rules for Scheduled Refresh
 # ---------------------------------------------------------------------------
 echo "--- Creating EventBridge rules ---"
 
@@ -288,9 +365,16 @@ echo "  CivicLedger Infrastructure Complete"
 echo "========================================="
 echo ""
 echo "ECR Repository:  ${ECR_URI}"
+echo "DynamoDB Table:  ${DYNAMODB_TABLE_NAME}"
 echo "Lambda Function: ${LAMBDA_FUNCTION_NAME}"
 echo "Function URL:    ${FUNCTION_URL}"
 echo "IAM Role:        ${ROLE_ARN}"
+echo ""
+echo "DynamoDB Table Layout (single-table design):"
+echo "  PK (String) - partition key"
+echo "  SK (String) - sort key"
+echo "  GSI1: GSI1PK/GSI1SK for cross-entity queries"
+echo "  TTL on 'ttl' attribute for auto-expiry"
 echo ""
 echo "EventBridge Rules:"
 echo "  - civicledger-daily-fundamentals (daily 12:00 UTC)"
@@ -302,4 +386,8 @@ echo "     CIVICLEDGER_FRED_API_KEY"
 echo "     CIVICLEDGER_EDGAR_IDENTITY"
 echo "  2. Run: ./deploy/build-and-push.sh"
 echo "  3. Test: curl ${FUNCTION_URL}health"
+echo "  4. Trigger initial refresh:"
+echo "     aws lambda invoke --function-name ${LAMBDA_FUNCTION_NAME} \\"
+echo "       --payload '{\"source\":\"aws.events\",\"detail\":{\"command\":\"all\"}}' \\"
+echo "       --region ${AWS_REGION} --profile ${AWS_PROFILE} /dev/null"
 echo ""
