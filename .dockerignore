@@ -1,0 +1,38 @@
+# Git
+.git/
+.gitignore
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.eggs/
+dist/
+.venv/
+venv/
+
+# Data / local state
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# Dev tooling
+.pytest_cache/
+.ruff_cache/
+tests/
+.env
+.env.*
+
+# IDE
+.vscode/
+.idea/
+
+# Deploy artifacts (don't need deploy scripts inside the image)
+deploy/
+.github/
+
+# Docs (keep README.md — hatchling needs it from pyproject.toml)
+LICENSE
+claude_desktop_config.json

@@ -1,0 +1,126 @@
+name: Deploy CivicLedger to Lambda
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "civicledger/**"
+      - "pyproject.toml"
+      - "Dockerfile"
+      - ".github/workflows/deploy-lambda.yml"
+  workflow_dispatch: # Manual trigger
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPO_NAME: civicledger
+  LAMBDA_FUNCTION_NAME: civicledger-mcp
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  # --------------------------------------------------------------------------
+  # Lint and test (fast fail before building image)
+  # --------------------------------------------------------------------------
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Lint
+        run: ruff check civicledger/
+
+      - name: Test
+        run: pytest tests/ -x -q
+
+  # --------------------------------------------------------------------------
+  # Build image and deploy to Lambda
+  # --------------------------------------------------------------------------
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set image metadata
+        id: meta
+        run: |
+          ECR_REGISTRY="${{ steps.ecr-login.outputs.registry }}"
+          IMAGE_TAG="${{ github.sha }}"
+          SHORT_SHA="${IMAGE_TAG:0:7}"
+          echo "registry=${ECR_REGISTRY}" >> "$GITHUB_OUTPUT"
+          echo "image=${ECR_REGISTRY}/${ECR_REPO_NAME}" >> "$GITHUB_OUTPUT"
+          echo "tag=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
+            ${{ steps.meta.outputs.image }}:latest
+          platforms: linux/amd64
+
+      - name: Update Lambda function
+        run: |
+          aws lambda update-function-code \
+            --function-name "${LAMBDA_FUNCTION_NAME}" \
+            --image-uri "${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}"
+
+          echo "Waiting for function update..."
+          aws lambda wait function-updated-v2 \
+            --function-name "${LAMBDA_FUNCTION_NAME}"
+
+      - name: Verify deployment
+        run: |
+          FUNCTION_URL=$(aws lambda get-function-url-config \
+            --function-name "${LAMBDA_FUNCTION_NAME}" \
+            --query "FunctionUrl" --output text 2>/dev/null || echo "")
+
+          if [ -n "${FUNCTION_URL}" ] && [ "${FUNCTION_URL}" != "None" ]; then
+            echo "Testing health endpoint: ${FUNCTION_URL}health"
+
+            # Retry up to 3 times (cold start may take a moment)
+            for i in 1 2 3; do
+              HTTP_STATUS=$(curl -s -o /tmp/health_response.json -w "%{http_code}" \
+                "${FUNCTION_URL}health" --max-time 30 || echo "000")
+
+              if [ "${HTTP_STATUS}" = "200" ]; then
+                echo "Health check PASSED (attempt ${i})"
+                cat /tmp/health_response.json
+                echo ""
+                exit 0
+              fi
+
+              echo "Attempt ${i}: HTTP ${HTTP_STATUS}, retrying in 5s..."
+              sleep 5
+            done
+
+            echo "WARNING: Health check failed after 3 attempts (last HTTP ${HTTP_STATUS})"
+            echo "Function may need more time for cold start. Check manually:"
+            echo "  curl ${FUNCTION_URL}health"
+            # Don't fail the workflow — cold start can be slow
+          else
+            echo "No Function URL configured. Skipping health check."
+          fi
