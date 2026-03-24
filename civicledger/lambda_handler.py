@@ -185,16 +185,20 @@ async def _handle_mcp_message(body: str):
             # Use the FastMCP server's tool execution
             tool_result = await mcp._tool_manager.call_tool(tool_name, tool_args)
 
-            # Tool results come back as list of content items
-            content = []
-            for item in tool_result:
-                if hasattr(item, "text"):
-                    content.append({"type": "text", "text": item.text})
-                elif hasattr(item, "model_dump"):
-                    dumped = item.model_dump()
-                    content.append(dumped)
-                else:
-                    content.append({"type": "text", "text": str(item)})
+            # Tool results come back as string or list of content items
+            if isinstance(tool_result, str):
+                content = [{"type": "text", "text": tool_result}]
+            elif isinstance(tool_result, list):
+                content = []
+                for item in tool_result:
+                    if hasattr(item, "text"):
+                        content.append({"type": "text", "text": item.text})
+                    elif hasattr(item, "model_dump"):
+                        content.append(item.model_dump())
+                    else:
+                        content.append({"type": "text", "text": str(item)})
+            else:
+                content = [{"type": "text", "text": str(tool_result)}]
 
             result = {"content": content, "isError": False}
 
