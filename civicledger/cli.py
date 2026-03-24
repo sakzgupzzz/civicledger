@@ -8,6 +8,8 @@ Usage:
     civicledger refresh events --from 2026-03-01 --to 2026-03-31
     civicledger refresh all
     civicledger serve --port 8080
+    civicledger mcp                       # start MCP server (stdio)
+    civicledger mcp --transport sse       # start MCP server (SSE)
 """
 
 import argparse
@@ -128,6 +130,17 @@ def main():
     serve_parser.add_argument("--host", default="0.0.0.0", help="Host to bind to")
     serve_parser.add_argument("--port", type=int, default=8080, help="Port to bind to")
 
+    # mcp
+    mcp_parser = subparsers.add_parser("mcp", help="Start MCP (Model Context Protocol) server")
+    mcp_parser.add_argument(
+        "--transport",
+        choices=["stdio", "sse"],
+        default="stdio",
+        help="Transport protocol: stdio (local/Claude Desktop) or sse (remote/HTTP)",
+    )
+    mcp_parser.add_argument("--host", default="0.0.0.0", help="Host to bind to (SSE only)")
+    mcp_parser.add_argument("--port", type=int, default=8080, help="Port to bind to (SSE only)")
+
     args = parser.parse_args()
 
     if args.command is None:
@@ -160,6 +173,10 @@ def main():
         import uvicorn
         app = create_app()
         uvicorn.run(app, host=args.host, port=args.port)
+
+    elif args.command == "mcp":
+        from civicledger.mcp_server import run_server
+        run_server(transport=args.transport, host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

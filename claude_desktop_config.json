@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "civicledger": {
+      "command": "civicledger",
+      "args": ["mcp"],
+      "env": {
+        "CIVICLEDGER_FRED_API_KEY": "your-free-fred-api-key-here",
+        "CIVICLEDGER_EDGAR_IDENTITY": "YourName your@email.com"
+      }
+    }
+  }
+}
