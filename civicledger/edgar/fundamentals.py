@@ -7,8 +7,6 @@ Source: https://data.sec.gov/api/xbrl/frames/
 Public domain. No API key required. Rate limit: 10 req/sec.
 """
 
-import asyncio
-import math
 from datetime import date
 from typing import Any, Dict, List, Optional, Tuple
 

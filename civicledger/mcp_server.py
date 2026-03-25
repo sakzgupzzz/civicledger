@@ -65,7 +65,6 @@ async def _try_dynamo_first(fetch_from_dynamo, fetch_live, source_name: str):
     Returns the data from whichever source succeeds.
     """
     try:
-        from civicledger import storage
         data = await fetch_from_dynamo()
         if data:
             logger.debug(f"{source_name}: served from DynamoDB ({len(data) if isinstance(data, (list, dict)) else '?'} items)")

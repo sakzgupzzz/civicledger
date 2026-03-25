@@ -19,7 +19,6 @@ store data in DynamoDB. Otherwise they just print results to stdout.
 
 import argparse
 import asyncio
-import json
 import sys
 from datetime import date, timedelta
 

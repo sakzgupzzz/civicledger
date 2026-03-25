@@ -1,6 +1,5 @@
 """Database models for CivicLedger."""
 
-from datetime import datetime
 from sqlalchemy import (
     Column, DateTime, Float, Integer, Numeric, String, Text, Index,
 )

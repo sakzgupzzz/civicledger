@@ -9,7 +9,7 @@ Source: https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&type=13F
 Public domain. No API key required.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from loguru import logger
 

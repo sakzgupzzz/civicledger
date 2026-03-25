@@ -14,7 +14,6 @@ import asyncio
 import re
 from typing import Any, Dict, List, Optional
 
-import httpx
 from loguru import logger
 
 from civicledger.config import get_settings
@@ -42,7 +41,6 @@ async def fetch_recent_insider_trades(
     Returns list of {ticker, company, insider_name, filing_date, cik}.
     """
     settings = get_settings()
-    headers = {"User-Agent": settings.edgar_identity}
 
     # Use edgartools get_filings for bulk Form 4 access
     try:

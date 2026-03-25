@@ -11,7 +11,6 @@ Note: Senate data requires either manual access or a different data source.
 The Senate eFD site actively blocks Lambda/server IPs.
 """
 
-import asyncio
 import io
 import re
 import zipfile
