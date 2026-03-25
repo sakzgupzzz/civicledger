@@ -46,6 +46,8 @@ async def fetch_recent_insider_trades(
 
     # Use edgartools get_filings for bulk Form 4 access
     try:
+        import os
+        os.environ.setdefault("EDGAR_LOCAL_CACHE", "/tmp/edgar_cache")
         from edgar import set_identity, get_filings
         set_identity(settings.edgar_identity)
 
@@ -202,6 +204,8 @@ async def fetch_insider_trades_detailed(
     transaction type, insider title).
     """
     try:
+        import os
+        os.environ.setdefault("EDGAR_LOCAL_CACHE", "/tmp/edgar_cache")
         from edgar import set_identity, Company
         from civicledger.config import get_settings
 

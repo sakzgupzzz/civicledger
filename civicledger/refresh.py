@@ -232,13 +232,18 @@ async def refresh_congressional_trades(year: int) -> int:
         return 0
 
     items = []
-    for entry in data:
+    seen_sks: set = set()
+    for i, entry in enumerate(data):
         politician = (entry.get("politician") or "unknown").replace("#", "_")[:50]
         disc_date = entry.get("disclosure_date", "unknown")
-        chamber = entry.get("chamber", "unknown")
+        doc_id = entry.get("doc_id", str(i))
+        sk = f"{year}#{politician}#{disc_date}#{doc_id}"
+        if sk in seen_sks:
+            sk = f"{sk}#{i}"
+        seen_sks.add(sk)
         items.append(storage.build_item(
             pk="CONGRESS",
-            sk=f"{year}#{politician}#{disc_date}#{chamber}",
+            sk=sk,
             data=entry,
             ttl_seconds=TTL_90_DAYS,
             gsi1pk="CONGRESS",

@@ -53,6 +53,9 @@ async def fetch_holdings(
         from edgar import set_identity, Company
         from civicledger.config import get_settings
 
+        import os
+        os.environ.setdefault("EDGAR_LOCAL_CACHE", "/tmp/edgar_cache")
+
         settings = get_settings()
         set_identity(settings.edgar_identity)
 

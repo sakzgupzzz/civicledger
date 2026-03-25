@@ -14,6 +14,11 @@ Lambda Function URL provides the HTTP layer; this handler translates between
 Lambda's event format and the MCP server's ASGI interface.
 """
 
+import os
+# edgartools writes cache to home dir — redirect to /tmp BEFORE any imports
+os.environ["EDGAR_LOCAL_CACHE"] = "/tmp/edgar_cache"
+os.environ["HOME"] = "/tmp"
+
 import asyncio
 import json
 import traceback
