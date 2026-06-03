@@ -14,7 +14,7 @@ from typing import Any, Dict, List
 
 from loguru import logger
 
-from civicledger.edgar._client import efts_search
+from civicledger.edgar._client import EFTS_PAGE_SIZE, efts_search
 
 TICKER_RE = re.compile(r"\(([A-Z]{1,5})\)")
 
@@ -27,6 +27,7 @@ async def fetch_earnings(from_date: str, to_date: str) -> List[Dict[str, Any]]:
     """
     all_earnings: List[Dict[str, Any]] = []
     page = 0
+    fetched = 0
 
     while True:
         data = await efts_search(
@@ -35,7 +36,7 @@ async def fetch_earnings(from_date: str, to_date: str) -> List[Dict[str, Any]]:
             start_date=from_date,
             end_date=to_date,
             page=page,
-            size=200,
+            size=EFTS_PAGE_SIZE,
         )
 
         if not data:
@@ -43,6 +44,7 @@ async def fetch_earnings(from_date: str, to_date: str) -> List[Dict[str, Any]]:
 
         hits = data.get("hits", {}).get("hits", [])
         total = data.get("hits", {}).get("total", {}).get("value", 0)
+        fetched += len(hits)
 
         for h in hits:
             s = h.get("_source", {})
@@ -70,8 +72,7 @@ async def fetch_earnings(from_date: str, to_date: str) -> List[Dict[str, Any]]:
                     "cik": cik,
                 })
 
-        fetched = (page + 1) * 200
-        if fetched >= total or not hits:
+        if not hits or fetched >= total:
             break
         page += 1
         await asyncio.sleep(0.12)

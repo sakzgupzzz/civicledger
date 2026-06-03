@@ -5,6 +5,7 @@ is mandatory and must include a contact email.
 """
 
 import asyncio
+import os
 from typing import Any, Dict, Optional
 
 import httpx
@@ -14,6 +15,33 @@ from civicledger.config import get_settings
 
 _EDGAR_BASE = "https://data.sec.gov"
 _EFTS_BASE = "https://efts.sec.gov/LATEST"
+
+# Max hits per EFTS page (SEC caps the page size; requesting more silently
+# returns at most this many, so pagination must count actual hits, not the
+# requested size).
+EFTS_PAGE_SIZE = 100
+
+_identity_ready = False
+
+
+def ensure_edgar_identity() -> bool:
+    """Configure edgartools' SEC identity and local cache once per process.
+
+    Returns False if edgartools isn't installed. Idempotent — safe to call
+    from every fetcher that uses the `edgar` package.
+    """
+    global _identity_ready
+    if _identity_ready:
+        return True
+    try:
+        os.environ.setdefault("EDGAR_LOCAL_CACHE", "/tmp/edgar_cache")
+        from edgar import set_identity
+
+        set_identity(get_settings().edgar_identity)
+        _identity_ready = True
+        return True
+    except ImportError:
+        return False
 
 
 async def edgar_get(

@@ -9,9 +9,12 @@ Source: https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&type=13F
 Public domain. No API key required.
 """
 
+import asyncio
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
+
+from civicledger.edgar._client import ensure_edgar_identity
 
 
 def _to_number(v: Any) -> Optional[float]:
@@ -26,13 +29,9 @@ def _to_number(v: Any) -> Optional[float]:
 
 def _edgar_company(manager_name_or_cik: str):
     """Resolve a manager name or CIK to an edgartools Company (blocking)."""
-    import os
+    from edgar import Company
 
-    from edgar import Company, set_identity
-    from civicledger.config import get_settings
-
-    os.environ.setdefault("EDGAR_LOCAL_CACHE", "/tmp/edgar_cache")
-    set_identity(get_settings().edgar_identity)
+    ensure_edgar_identity()
     if manager_name_or_cik.isdigit() or manager_name_or_cik.startswith("0"):
         return Company(int(manager_name_or_cik.lstrip("0")))
     return Company(manager_name_or_cik)
@@ -119,12 +118,10 @@ async def fetch_holdings(
         limit: Max number of holdings to return
 
     Returns dict with: manager_name, manager_cik, period, filing_date,
-    total_value, holdings: [{ticker, company, cusip, shares, value_thousands,
-    share_change, change_percent}]
+    total_value, holdings: [{ticker, company, cusip, shares, value_usd}]
     """
-    try:
+    def _work() -> Dict[str, Any]:
         company = _edgar_company(manager_name_or_cik)
-
         filings_13f = company.get_filings(form="13F-HR")
         if not filings_13f or len(filings_13f) == 0:
             return {"error": f"No 13F filings found for {manager_name_or_cik}"}
@@ -136,7 +133,6 @@ async def fetch_holdings(
 
         holdings = _parse_holdings(obj)
         total_value = sum(h.get("value_usd") or 0 for h in holdings)
-
         result = {
             "manager_name": str(company),
             "manager_cik": getattr(company, "cik", None),
@@ -152,6 +148,8 @@ async def fetch_holdings(
         )
         return result
 
+    try:
+        return await asyncio.to_thread(_work)
     except ImportError:
         logger.warning("edgartools not installed — 13F holdings unavailable")
         return {"error": "edgartools not installed"}
@@ -170,7 +168,7 @@ async def fetch_holdings_changes(
     with share and USD-value deltas — by diffing the two latest 13F-HR
     information tables on CUSIP.
     """
-    try:
+    def _work() -> Dict[str, Any]:
         company = _edgar_company(manager_name_or_cik)
         filings_13f = company.get_filings(form="13F-HR")
         if not filings_13f or len(filings_13f) < 2:
@@ -223,6 +221,8 @@ async def fetch_holdings_changes(
             "decreased": decreased[:limit],
         }
 
+    try:
+        return await asyncio.to_thread(_work)
     except ImportError:
         return {"error": "edgartools not installed"}
     except Exception as e:
@@ -231,23 +231,27 @@ async def fetch_holdings_changes(
 
 
 async def fetch_top_institutions_summary() -> List[Dict[str, Any]]:
-    """Fetch summary for top institutional investors.
+    """Fetch summary for top institutional investors (fetched concurrently).
 
-    Returns list of {manager_name, manager_cik, total_value_millions, holdings_count}.
+    Returns list of {manager_name, manager_cik, total_value_millions,
+    holdings_count, period, top_holdings}.
     """
-    results = []
-    for name, cik in TOP_INSTITUTIONS:
+    async def _one(name: str, cik: str):
         try:
             data = await fetch_holdings(cik, limit=5)
-            if "error" not in data:
-                results.append({
-                    "manager_name": name,
-                    "manager_cik": cik,
-                    "total_value_millions": data.get("total_value_millions"),
-                    "holdings_count": data.get("holdings_count"),
-                    "period": data.get("period"),
-                    "top_holdings": data.get("holdings", [])[:5],
-                })
-        except Exception as e:
+            if "error" in data:
+                return None
+            return {
+                "manager_name": name,
+                "manager_cik": cik,
+                "total_value_millions": data.get("total_value_millions"),
+                "holdings_count": data.get("holdings_count"),
+                "period": data.get("period"),
+                "top_holdings": data.get("holdings", [])[:5],
+            }
+        except Exception as e:  # noqa: BLE001
             logger.debug(f"Failed to fetch 13F for {name}: {e}")
-    return results
+            return None
+
+    results = await asyncio.gather(*(_one(n, c) for n, c in TOP_INSTITUTIONS))
+    return [r for r in results if r]

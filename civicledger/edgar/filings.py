@@ -8,14 +8,12 @@ Source: SEC EDGAR EFTS + submissions APIs. Public domain. No API key required.
 """
 
 import asyncio
-import os
 import re
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
-from civicledger.config import get_settings
-from civicledger.edgar._client import efts_search
+from civicledger.edgar._client import EFTS_PAGE_SIZE, efts_search, ensure_edgar_identity
 
 _TICKER_RE = re.compile(r"\(([A-Z]{1,5})\)")
 
@@ -25,12 +23,7 @@ def _filing_index_url(accession: str, cik: Optional[int]) -> Optional[str]:
     if not accession or cik is None:
         return None
     acc_nodash = accession.replace("-", "")
-    return (
-        f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany"
-        f"&CIK={cik}&type=&dateb=&owner=include&count=40"
-        if not acc_nodash
-        else f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc_nodash}/{accession}-index.htm"
-    )
+    return f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc_nodash}/{accession}-index.htm"
 
 
 async def search_filings(
@@ -52,15 +45,17 @@ async def search_filings(
     """
     results: List[Dict[str, Any]] = []
     page = 0
+    fetched = 0
     while len(results) < limit:
         data = await efts_search(
             query=query, forms=forms or "", start_date=from_date,
-            end_date=to_date, page=page, size=min(100, limit),
+            end_date=to_date, page=page, size=min(EFTS_PAGE_SIZE, limit),
         )
         if not data:
             break
         hits = data.get("hits", {}).get("hits", [])
         total = data.get("hits", {}).get("total", {}).get("value", 0)
+        fetched += len(hits)
         for h in hits:
             s = h.get("_source", {})
             names = s.get("display_names", [])
@@ -80,7 +75,7 @@ async def search_filings(
             })
             if len(results) >= limit:
                 break
-        if (page + 1) * min(100, limit) >= total or not hits:
+        if not hits or fetched >= total:
             break
         page += 1
         await asyncio.sleep(0.12)
@@ -104,10 +99,9 @@ async def fetch_company_filings(
     Returns list of {form, filing_date, accession, items, description, url}.
     """
     def _work() -> List[Dict[str, Any]]:
-        from edgar import Company, set_identity
+        from edgar import Company
 
-        os.environ.setdefault("EDGAR_LOCAL_CACHE", "/tmp/edgar_cache")
-        set_identity(get_settings().edgar_identity)
+        ensure_edgar_identity()
         company = Company(ticker)
         filings = company.get_filings(form=form) if form else company.get_filings()
         if not filings:

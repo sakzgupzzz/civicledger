@@ -1,11 +1,16 @@
 """Configuration for CivicLedger."""
 
-from pydantic_settings import BaseSettings
 from typing import Optional
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     """CivicLedger settings. All optional — works with zero config."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="CIVICLEDGER_", env_file=".env", extra="ignore"
+    )
 
     # SEC EDGAR (no API key needed, just identity for User-Agent)
     edgar_identity: str = "CivicLedger admin@civicledger.dev"
@@ -15,9 +20,6 @@ class Settings(BaseSettings):
 
     # Database
     database_url: str = "sqlite+aiosqlite:///./data/civicledger.db"
-
-    # Redis (optional — works without it, just no caching)
-    redis_url: Optional[str] = None
 
     # DynamoDB
     dynamodb_table: str = "civicledger"
@@ -32,11 +34,6 @@ class Settings(BaseSettings):
 
     # Logging
     log_level: str = "INFO"
-
-    class Config:
-        env_prefix = "CIVICLEDGER_"
-        env_file = ".env"
-        extra = "ignore"
 
 
 _settings: Optional[Settings] = None

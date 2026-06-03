@@ -12,13 +12,12 @@ Public domain. No API key required.
 """
 
 import asyncio
-import os
 from datetime import date, timedelta
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
-from civicledger.config import get_settings
+from civicledger.edgar._client import ensure_edgar_identity
 
 # Concurrency cap when parsing many Form 4 XMLs from live EDGAR.
 _PARSE_CONCURRENCY = 8
@@ -42,14 +41,7 @@ def _to_int(v: Any) -> Optional[int]:
 
 def _edgar_ready() -> bool:
     """Configure edgartools identity + cache. Returns False if not installed."""
-    try:
-        os.environ.setdefault("EDGAR_LOCAL_CACHE", "/tmp/edgar_cache")
-        from edgar import set_identity
-
-        set_identity(get_settings().edgar_identity)
-        return True
-    except ImportError:
-        return False
+    return ensure_edgar_identity()
 
 
 def _summary_to_transactions(summary: Any, ticker: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -161,20 +153,18 @@ async def fetch_recent_insider_trades(
     to_date: str,
     ticker: Optional[str] = None,
     limit: int = 200,
-    detailed: bool = False,
 ) -> List[Dict[str, Any]]:
     """Fetch recent Form 4 insider trades across the whole market.
 
     Iterates each day in [from_date, to_date] (fixing the prior single-day
-    bug) and pulls Form 4 filings. By default returns one parsed row per
-    transaction with real insider name, ticker, shares, price, and value.
+    bug) and pulls Form 4 filings. Returns one parsed row per transaction
+    with real insider name, ticker, shares, price, and value.
 
     Args:
         from_date: Start date (YYYY-MM-DD)
         to_date: End date (YYYY-MM-DD)
         ticker: Optional — filter to a specific issuer ticker
         limit: Max transaction rows to return
-        detailed: Kept for API symmetry; rows are always parsed for detail.
 
     Returns list of trade dicts (see _summary_to_transactions for fields).
     """
@@ -243,24 +233,26 @@ async def _fetch_via_efts(
     """Fallback: EFTS full-text search for Form 4 filings (metadata only)."""
     import re
 
-    from civicledger.edgar._client import efts_search
+    from civicledger.edgar._client import EFTS_PAGE_SIZE, efts_search
 
     ticker_re = re.compile(r"\(([A-Z]{1,5})\)")
     query = f'"{ticker}"' if ticker else '"securities"'
 
     all_trades: List[Dict[str, Any]] = []
     page = 0
+    fetched = 0
 
     while len(all_trades) < limit:
         data = await efts_search(
             query=query, forms="4", start_date=from_date, end_date=to_date,
-            page=page, size=200,
+            page=page, size=EFTS_PAGE_SIZE,
         )
         if not data:
             break
 
         hits = data.get("hits", {}).get("hits", [])
         total = data.get("hits", {}).get("total", {}).get("value", 0)
+        fetched += len(hits)
 
         for h in hits:
             s = h.get("_source", {})
@@ -289,7 +281,7 @@ async def _fetch_via_efts(
                 "cik": int(ciks[-1]) if ciks else None,
             })
 
-        if (page + 1) * 200 >= total or not hits:
+        if not hits or fetched >= total:
             break
         page += 1
         await asyncio.sleep(0.12)

@@ -106,7 +106,6 @@ INSTANT_CONCEPTS = [
     ("LiabilitiesCurrent", None),
     ("CommonStockSharesOutstanding", "EntityCommonStockSharesOutstanding"),
     ("Inventories", "InventoryNet"),
-    ("LongTermDebt", "LongTermDebtNoncurrent"),
 ]
 
 

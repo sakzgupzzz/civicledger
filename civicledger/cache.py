@@ -92,7 +92,9 @@ async def cached(key: str, ttl: int, factory: Callable[[], Awaitable[Any]]) -> A
         logger.debug(f"cache hit: {key}")
         return fresh
 
-    lock = _locks.setdefault(key, asyncio.Lock())
+    lock = _locks.get(key)
+    if lock is None:
+        lock = _locks[key] = asyncio.Lock()
     async with lock:
         # Re-check inside the lock in case another task just populated it.
         fresh = _read_fresh(path, ttl, time.time())
