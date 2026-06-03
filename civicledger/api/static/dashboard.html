@@ -203,6 +203,31 @@
   .setup code{font-family:var(--mono);font-size:12px;background:var(--ink-3);border:1px solid var(--line);
     padding:2px 7px;border-radius:2px;color:var(--bone)}
 
+  /* profile sections */
+  .psec{margin:22px 0 6px;border:1px solid var(--line);background:var(--ink-2);border-radius:2px;overflow:hidden;animation:fade-up .4s both}
+  .psec-h{display:flex;align-items:baseline;justify-content:space-between;padding:13px 18px;border-bottom:1px solid var(--line-soft);background:var(--ink-3)}
+  .psec-h h3{font-family:var(--serif);font-size:16px;margin:0}
+  .psec-h .c{font-family:var(--mono);font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--bone-faint)}
+  .psec .empty{padding:16px 18px;font-family:var(--sans);font-size:13px;color:var(--bone-faint)}
+  .psec .ledger{font-size:12.5px}
+  .psec .ledger td,.psec .ledger th{padding:9px 18px}
+  .pgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr))}
+  .pgrid .fund-cell{border-bottom:1px solid var(--line-soft)}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;padding:14px 18px}
+  .chip{font-family:var(--mono);font-size:11px;letter-spacing:.04em;color:var(--bone);border:1px solid var(--line);
+    background:var(--ink-3);padding:7px 11px;border-radius:2px;display:flex;flex-direction:column;gap:2px}
+  .chip b{color:var(--bone)} .chip span{color:var(--bone-faint);font-size:9.5px;letter-spacing:.1em}
+
+  /* search box inside a panel */
+  .qbox{display:flex;gap:0;border:1px solid var(--line);background:var(--ink-2);border-radius:2px;overflow:hidden;margin:6px 2px 4px;max-width:640px;transition:border-color .2s,box-shadow .2s}
+  .qbox:focus-within{border-color:var(--amber-deep);box-shadow:0 0 0 1px var(--amber-deep)}
+  .qbox input{flex:1;background:transparent;border:0;color:var(--bone);font-family:var(--mono);font-size:14px;padding:11px 14px;outline:none}
+  .qbox input::placeholder{color:var(--bone-faint)}
+  .qbox button{background:var(--ink-3);border:0;border-left:1px solid var(--line);color:var(--amber);font-family:var(--mono);font-size:12px;padding:0 16px;cursor:pointer}
+  .qbox button:hover{background:var(--amber);color:var(--ink)}
+  .chg{display:inline-block;font-variant-numeric:tabular-nums}
+  .chg.up{color:var(--green)} .chg.dn{color:var(--red)}
+
   @media(max-width:680px){
     .wrap{padding:0 16px 60px}
     .panel-head{padding:16px 0 10px}
@@ -235,20 +260,26 @@
   </header>
 
   <nav class="tabs" id="tabs">
-    <button class="tab active" data-tab="insider">Insider Trades</button>
+    <button class="tab active" data-tab="profile">Profile</button>
+    <button class="tab" data-tab="insider">Insider</button>
     <button class="tab" data-tab="institutions">13F Holdings</button>
     <button class="tab" data-tab="congress">Congress</button>
+    <button class="tab" data-tab="trending">Trending</button>
     <button class="tab" data-tab="earnings">Earnings</button>
     <button class="tab" data-tab="material">8-K Events</button>
     <button class="tab" data-tab="economic">Economic</button>
+    <button class="tab" data-tab="search">Search</button>
   </nav>
 
-  <section class="panel active" id="p-insider"></section>
+  <section class="panel active" id="p-profile"></section>
+  <section class="panel" id="p-insider"></section>
   <section class="panel" id="p-institutions"></section>
   <section class="panel" id="p-congress"></section>
+  <section class="panel" id="p-trending"></section>
   <section class="panel" id="p-earnings"></section>
   <section class="panel" id="p-material"></section>
   <section class="panel" id="p-economic"></section>
+  <section class="panel" id="p-search"></section>
 
   <footer>
     <div class="src">
@@ -395,12 +426,37 @@ const loaders = {
 
   async institutions(panel, opts={}){
     if(opts.manager){
-      loading(panel,opts.manager);
+      const showChanges = !!opts.changes;
+      loading(panel, showChanges?`${opts.manager} — quarterly changes`:opts.manager);
       try{
+        const back = el('button','toggle','‹ Top funds'); back.onclick=()=>loaders.institutions(panel);
+        const tog = el('button','toggle'+(showChanges?' on':''), showChanges?'Changes · ON':'Show changes');
+        tog.onclick=()=>loaders.institutions(panel,{manager:opts.manager,changes:!showChanges});
+        const ctl = el('div','controls'); ctl.appendChild(tog); ctl.appendChild(back);
+        if(showChanges){
+          const r = await getData(`/institutions/${encodeURIComponent(opts.manager)}/changes?limit=40`, TTL.inst, opts.force);
+          const d = r.data; panel.innerHTML='';
+          const s = d.summary||{};
+          const h = head(panel, esc(d.manager_name||opts.manager), `${esc(d.previous_period||'')} → ${esc(d.current_period||'')} · +${s.new||0} new · −${s.exited||0} exited`, ctl);
+          stampHead(h, r, ()=>loaders.institutions(panel,{manager:opts.manager,changes:true,force:true}));
+          const section=(title, rows, cols, render)=>{
+            if(!rows||!rows.length) return;
+            panel.appendChild(el('div','psec-h',`<h3>${title}</h3><span class="c">${rows.length}</span>`));
+            const tb=table(panel,cols); rows.forEach((x,i)=>row(tb,render(x),i));
+          };
+          section('New positions', d.new_positions, [{h:'Ticker'},{h:'Issuer'},{h:'Shares',num:1},{h:'Value',num:1}],
+            x=>[`<td class="tk">${esc(x.ticker||'—')}</td>`,`<td class="who">${esc(x.company||'')}</td>`,`<td class="num">${fmtNum(x.shares)}</td>`,`<td class="num">${fmtMoney(x.value_usd)}</td>`]);
+          section('Increased', d.increased, [{h:'Ticker'},{h:'Issuer'},{h:'Δ Shares',num:1},{h:'Δ Value',num:1}],
+            x=>[`<td class="tk">${esc(x.ticker||'—')}</td>`,`<td class="who">${esc(x.company||'')}</td>`,`<td class="num chg up">+${fmtNum(x.shares_change)}</td>`,`<td class="num chg up">+${fmtMoney(x.value_change_usd)}</td>`]);
+          section('Decreased', d.decreased, [{h:'Ticker'},{h:'Issuer'},{h:'Δ Shares',num:1},{h:'Δ Value',num:1}],
+            x=>[`<td class="tk">${esc(x.ticker||'—')}</td>`,`<td class="who">${esc(x.company||'')}</td>`,`<td class="num chg dn">${fmtNum(x.shares_change)}</td>`,`<td class="num chg dn">${fmtMoney(x.value_change_usd)}</td>`]);
+          section('Exited', d.exited_positions, [{h:'Ticker'},{h:'Issuer'},{h:'Shares before',num:1},{h:'Value before',num:1}],
+            x=>[`<td class="tk">${esc(x.ticker||'—')}</td>`,`<td class="who">${esc(x.company||'')}</td>`,`<td class="num">${fmtNum(x.shares_before)}</td>`,`<td class="num">${fmtMoney(x.value_before_usd)}</td>`]);
+          return;
+        }
         const r = await getData(`/institutions/${encodeURIComponent(opts.manager)}?limit=40`, TTL.inst, opts.force);
         const d = r.data; panel.innerHTML='';
-        const back = el('button','toggle','‹ Top funds'); back.onclick=()=>loaders.institutions(panel);
-        const h = head(panel, esc(d.manager_name||opts.manager), `${fmtMoney((d.total_value_millions||0)*1e6)} · ${d.holdings_count} positions · ${esc(d.period||'')}`, back);
+        const h = head(panel, esc(d.manager_name||opts.manager), `${fmtMoney((d.total_value_millions||0)*1e6)} · ${d.holdings_count} positions · ${esc(d.period||'')}`, ctl);
         stampHead(h, r, ()=>loaders.institutions(panel,{manager:opts.manager,force:true}));
         const tb = table(panel,[{h:'Ticker'},{h:'Issuer'},{h:'Shares',num:1},{h:'Value',num:1},{h:'Weight',num:1}]);
         const top = d.holdings[0]?.value_usd||1;
@@ -545,7 +601,114 @@ const loaders = {
       else errState(panel,e.message);
     }
   },
+
+  async profile(panel, opts={}){
+    const tk = STATE.ticker;
+    if(!tk){ emptyState(panel,'Search a ticker','One ticker, every source. Enter a symbol above to see fundamentals, insider trades, recent filings, congressional trades, and which top funds hold it — all in one view.'); return; }
+    loading(panel,`profile for ${tk} (merging all sources)`);
+    try{
+      const r = await getData(`/ticker/${tk}`, TTL.fund, opts.force);
+      const d = r.data; panel.innerHTML='';
+      const h = head(panel, `${esc(d.company||tk)}`, `${tk} · unified profile`);
+      stampHead(h, r, ()=>loaders.profile(panel,{force:true}));
+
+      // Fundamentals grid
+      const f = d.fundamentals;
+      if(f){
+        const cells=[['Revenue',fmtMoney(f.revenue)],['Net Income',fmtMoney(f.net_income),f.net_income],['Profit Margin',fmtPct(f.profit_margin),f.profit_margin],['ROE',fmtPct(f.return_on_equity)],['EPS',f.eps!=null?'$'+(+f.eps).toFixed(2):'—'],['Rev Growth',fmtPct(f.revenue_growth),f.revenue_growth]];
+        const sec=el('div','psec'); sec.appendChild(el('div','psec-h',`<h3>Fundamentals</h3><span class="c">${esc(f.period||'')}</span>`));
+        sec.appendChild(el('div','pgrid', cells.map(([l,v,s])=>`<div class="fund-cell"><div class="l">${l}</div><div class="v ${s==null?'':(+s>0?'pos':(+s<0?'neg':''))}">${v}</div></div>`).join('')));
+        panel.appendChild(sec);
+      }
+      // Institutional holders
+      psecTable(panel,'Institutional Holders (13F)', d.institutional_holders, d.institutional_holders.length+' funds',
+        [{h:'Fund'},{h:'Shares',num:1},{h:'Value',num:1}],
+        x=>[`<td class="who">${esc(x.manager_name)}</td>`,`<td class="num">${fmtNum(x.shares)}</td>`,`<td class="num">${fmtMoney(x.value_usd)}</td>`],
+        'No tracked top fund reports holding this name.');
+      // Insider
+      psecTable(panel,'Recent Insider Trades', d.insider_trades, d.insider_trades.length+' txns',
+        [{h:'Date'},{h:'Insider'},{h:'Type'},{h:'Shares',num:1},{h:'Value',num:1}],
+        t=>[`<td>${esc(t.transaction_date||'—')}</td>`,`<td class="who">${esc(t.insider_name||'—')}<div class="sub">${esc(t.insider_title||'')}</div></td>`,`<td>${txnBadge(t.transaction_type)}</td>`,`<td class="num">${fmtNum(t.shares)}</td>`,`<td class="num">${fmtMoney(t.total_value)}</td>`],
+        'No recent Form 4 filings.');
+      // Congress
+      psecTable(panel,'Congressional Trades', d.congress_trades, d.congress_trades.length+' trades',
+        [{h:'Date'},{h:'Member'},{h:'Type'},{h:'Amount'}],
+        t=>[`<td>${esc(t.transaction_date||'—')}</td>`,`<td class="who">${esc(t.politician||'')}</td>`,`<td>${txnBadge(t.transaction_type)}</td>`,`<td>${esc(t.amount_range||'—')}</td>`],
+        'No US House disclosures for this ticker this year.');
+      // Recent filings
+      psecTable(panel,'Recent Filings', d.recent_filings, d.recent_filings.length+' filings',
+        [{h:'Date'},{h:'Form'},{h:'Items'},{h:''}],
+        x=>[`<td>${esc(x.filing_date)}</td>`,`<td class="tk">${esc(x.form||'—')}</td>`,`<td class="sub">${esc((x.items||[]).join(', '))}</td>`,`<td>${x.url?`<a href="${esc(x.url)}" target="_blank" style="color:var(--amber);text-decoration:none">view ↗</a>`:''}</td>`],
+        'No recent filings.');
+    }catch(e){ errState(panel,e.message); }
+  },
+
+  async trending(panel, opts={}){
+    const mode = opts.mode || 'congress';
+    loading(panel, mode==='congress'?'House trade leaderboard':'insider activity leaderboard');
+    try{
+      const tg = el('div','controls');
+      ['congress','insider'].forEach(md=>{
+        const b=el('button','toggle'+(mode===md?' on':''), md==='congress'?'Congress':'Insiders');
+        b.onclick=()=>loaders.trending(panel,{mode:md}); tg.appendChild(b);
+      });
+      if(mode==='congress'){
+        const r = await getData(`/trending/congress?limit=25`, TTL.congress, opts.force);
+        const d=r.data; panel.innerHTML='';
+        const h=head(panel,'Trending — Congress', `Most-traded tickers · ${d.year} · House`, tg);
+        stampHead(h,r,()=>loaders.trending(panel,{mode,force:true}));
+        panel.appendChild(el('div','hint','Tickers ranked by number of US House trade disclosures this year.'));
+        const tb=table(panel,[{h:'#'},{h:'Ticker'},{h:'Trades',num:1},{h:'Buys',num:1},{h:'Sells',num:1},{h:'Members',num:1},{h:'Last'}]);
+        d.tickers.forEach((x,i)=>row(tb,[`<td class="sub">${i+1}</td>`,`<td class="tk">${esc(x.ticker)}</td>`,`<td class="num">${x.trades}</td>`,`<td class="num chg up">${x.buys}</td>`,`<td class="num chg dn">${x.sells}</td>`,`<td class="num">${x.members}</td>`,`<td class="sub">${esc(x.last_date||'')}</td>`],i));
+      } else {
+        const r = await getData(`/trending/insider?from_date=${ago(7)}&to_date=${today()}&limit=25`, TTL.insider, opts.force);
+        const d=r.data; panel.innerHTML='';
+        const h=head(panel,'Trending — Insiders', `Most active · ${d.from_date} → ${d.to_date}`, tg);
+        stampHead(h,r,()=>loaders.trending(panel,{mode,force:true}));
+        panel.appendChild(el('div','hint','Tickers ranked by total insider buy + sell dollar value (SEC Form 4).'));
+        const tb=table(panel,[{h:'#'},{h:'Ticker'},{h:'Buy $',num:1},{h:'Sell $',num:1},{h:'Net $',num:1},{h:'Insiders',num:1}]);
+        d.tickers.forEach((x,i)=>row(tb,[`<td class="sub">${i+1}</td>`,`<td class="tk">${esc(x.ticker)}</td>`,`<td class="num chg up">${fmtMoney(x.buy_value)}</td>`,`<td class="num chg dn">${fmtMoney(x.sell_value)}</td>`,`<td class="num ${x.net_value>=0?'chg up':'chg dn'}">${fmtMoney(x.net_value)}</td>`,`<td class="num">${x.insiders}</td>`],i));
+      }
+    }catch(e){ errState(panel,e.message); }
+  },
+
+  async search(panel, opts={}){
+    if(!panel.dataset.init){
+      panel.dataset.init='1'; panel.innerHTML='';
+      head(panel,'Filing Search','EDGAR full-text');
+      const box=el('div','qbox'); box.innerHTML='<input id="qq" placeholder="Search all filings — e.g. &quot;going concern&quot;, &quot;data breach&quot;" spellcheck="false"><button id="qgo">Search ↵</button>';
+      panel.appendChild(box);
+      panel.appendChild(el('div','hint','Full-text search across every SEC EDGAR filing. Optionally narrow by form type in the API (forms=8-K).'));
+      const res=el('div'); res.id='qres'; panel.appendChild(res);
+      const run=async()=>{
+        const q=panel.querySelector('#qq').value.trim(); if(q.length<2) return;
+        const rr=panel.querySelector('#qres'); rr.innerHTML='<div class="state"><span class="spinner"></span>Searching EDGAR…</div>';
+        try{
+          const r=await getData(`/search?q=${encodeURIComponent(q)}&limit=40`, TTL.mat, true);
+          const d=r.data; rr.innerHTML='';
+          if(!d.count){ rr.appendChild(el('div','state',`<div class="big">No matches</div>Nothing found for “${esc(q)}”.`)); return; }
+          rr.appendChild(el('div','panel-head',`<h2 style="font-size:17px">${d.count} matches</h2>`));
+          const tb=table(rr,[{h:'Date'},{h:'Form'},{h:'Ticker'},{h:'Company'},{h:''}]);
+          d.results.forEach((x,i)=>row(tb,[`<td>${esc(x.filing_date||'—')}</td>`,`<td class="tk">${esc(x.form||'—')}</td>`,`<td class="tk">${esc(x.ticker||'—')}</td>`,`<td class="who">${esc(x.company||'')}</td>`,`<td>${x.url?`<a href="${esc(x.url)}" target="_blank" style="color:var(--amber);text-decoration:none">↗</a>`:''}</td>`],i));
+        }catch(e){ rr.innerHTML=''; rr.appendChild(el('div','state',`<div class="big">Error</div>${esc(e.message)}`)); }
+      };
+      panel.querySelector('#qgo').onclick=run;
+      panel.querySelector('#qq').addEventListener('keydown',e=>{ if(e.key==='Enter') run(); });
+    }
+  },
 };
+
+// helper: a profile sub-section rendered as a titled table
+function psecTable(panel, title, rows, count, cols, render, emptyMsg){
+  const sec = el('div','psec');
+  sec.appendChild(el('div','psec-h',`<h3>${title}</h3><span class="c">${rows&&rows.length?esc(count):''}</span>`));
+  if(!rows||!rows.length){ sec.appendChild(el('div','empty',emptyMsg||'No data.')); panel.appendChild(sec); return; }
+  const wrap=el('div'); const t=el('table','ledger');
+  t.innerHTML='<thead><tr>'+cols.map(c=>`<th${c.num?' style="text-align:right"':''}>${c.h}</th>`).join('')+'</tr></thead>';
+  const tb=el('tbody'); t.appendChild(tb); wrap.appendChild(t); sec.appendChild(wrap);
+  rows.forEach((x,i)=>{ const tr=el('tr'); tr.style.animationDelay=(Math.min(i,12)*20)+'ms'; tr.innerHTML=render(x).join(''); tb.appendChild(tr); });
+  panel.appendChild(sec);
+}
 
 // FRED API-key setup instructions (shown when the key isn't configured).
 function fredSetupCard(){
@@ -601,15 +764,16 @@ $('#searchForm').addEventListener('submit',e=>{
   if(!/^[A-Z]{1,5}([.\-][A-Z]{1,4})?$/.test(tk)){ $('#tk').focus(); return; }
   STATE.ticker=tk;
   loadFundamentals(tk);
-  // refresh ticker-sensitive tabs
-  ['insider','earnings','material'].forEach(n=>loaded.delete(n));
+  // invalidate ticker-sensitive tabs so they refetch for the new symbol
+  const sensitive=['profile','insider','earnings','material'];
+  sensitive.forEach(n=>loaded.delete(n));
   const active=document.querySelector('.tab.active').dataset.tab;
-  if(['insider','earnings','material'].includes(active)){ loaded.add(active); loaders[active]($('#p-'+active)); }
-  else activate('insider');
+  if(sensitive.includes(active)){ loaded.add(active); loaders[active]($('#p-'+active)); }
+  else activate('profile');
 });
 
 // boot
-activate('insider');
+activate('profile');
 </script>
 </body>
 </html>

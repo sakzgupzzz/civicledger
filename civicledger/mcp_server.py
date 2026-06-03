@@ -647,6 +647,210 @@ async def get_economic_calendar(
 
 
 # ---------------------------------------------------------------------------
+# Tool 10: Unified Ticker Profile
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def get_ticker_profile(ticker: str) -> str:
+    """Fetch a complete profile for one ticker across every CivicLedger source.
+
+    Merges, in a single call: SEC fundamentals, recent insider (Form 4) trades,
+    recent filings (incl. 8-K material events), US House congressional trades,
+    and which top institutions hold the stock (13F). Best starting point for
+    researching a company.
+
+    Source: SEC EDGAR + House clerk. Public domain.
+
+    Args:
+        ticker: Stock ticker symbol (e.g., "AAPL"). Required.
+    """
+    try:
+        tk = normalize_ticker(ticker)
+        from civicledger.profile import fetch_ticker_profile
+        data = await fetch_ticker_profile(tk)
+        return _format_result(
+            data,
+            f"Profile for {tk} ({data.get('company') or '—'}): "
+            f"{data['sources']['insider_trades']} insider trades, "
+            f"{data['sources']['recent_filings']} filings, "
+            f"{data['sources']['congress_trades']} congress trades, "
+            f"{data['sources']['institutional_holders']} institutional holders",
+        )
+    except ValidationError as e:
+        return f"Invalid input: {e}"
+    except Exception as e:
+        return _tool_error("get_ticker_profile", e)
+
+
+# ---------------------------------------------------------------------------
+# Tool 11: 13F Quarter-over-Quarter Changes
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def get_institutional_changes(manager: str, limit: int = 50) -> str:
+    """Compare a fund's two most recent 13F filings — what they bought and sold.
+
+    Returns positions the manager opened, exited, added to, or trimmed last
+    quarter, with share and dollar-value changes.
+
+    Source: SEC EDGAR 13F-HR filings. Public domain.
+
+    Args:
+        manager: Manager name (e.g., "Berkshire Hathaway") or CIK. Required.
+        limit: Max positions per change category. Defaults to 50.
+    """
+    try:
+        if not manager or not manager.strip():
+            raise ValidationError("manager is required (a fund name or CIK).")
+        lim = normalize_limit(limit, default=50, maximum=200)
+        from civicledger.edgar.institutional import fetch_holdings_changes
+        data = await fetch_holdings_changes(manager.strip(), limit=lim)
+        if "error" in data:
+            return f"Error: {data['error']}"
+        s = data.get("summary", {})
+        return _format_result(
+            data,
+            f"{data.get('manager_name', manager)} 13F changes "
+            f"({data.get('previous_period')} → {data.get('current_period')}): "
+            f"{s.get('new', 0)} new, {s.get('exited', 0)} exited, "
+            f"{s.get('increased', 0)} increased, {s.get('decreased', 0)} decreased",
+        )
+    except ValidationError as e:
+        return f"Invalid input: {e}"
+    except Exception as e:
+        return _tool_error("get_institutional_changes", e)
+
+
+# ---------------------------------------------------------------------------
+# Tool 12 & 13: Trending / Leaderboards
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def get_congress_leaderboard(year: int | None = None, limit: int = 25) -> str:
+    """Most-traded stock tickers by members of the US House of Representatives.
+
+    Aggregates House PTR disclosures into a leaderboard: per ticker, the trade
+    count, buy/sell split, distinct members trading it, and last trade date.
+
+    Source: House clerk disclosures. Public domain (House only).
+
+    Args:
+        year: Year to aggregate. Defaults to the current year.
+        limit: Number of top tickers. Defaults to 25.
+    """
+    try:
+        yr = normalize_year(year)
+        lim = normalize_limit(limit, default=25, maximum=100)
+        from civicledger.aggregates import congress_leaderboard
+        data = await congress_leaderboard(year=yr, limit=lim)
+        if not data:
+            return f"No congressional trades found for {yr}."
+        return _format_result(data, f"Top {len(data)} tickers traded by US House members in {yr}")
+    except ValidationError as e:
+        return f"Invalid input: {e}"
+    except Exception as e:
+        return _tool_error("get_congress_leaderboard", e)
+
+
+@mcp.tool()
+async def get_insider_leaderboard(
+    from_date: str | None = None,
+    to_date: str | None = None,
+    limit: int = 25,
+) -> str:
+    """Tickers with the most insider buying / selling over a date window.
+
+    Aggregates SEC Form 4 trades into a leaderboard: per ticker, total buy
+    value, sell value, net value, buy/sell counts, and distinct insiders.
+
+    Source: SEC EDGAR Form 4. Public domain.
+
+    Args:
+        from_date: Start date (YYYY-MM-DD). Defaults to 7 days ago.
+        to_date: End date (YYYY-MM-DD). Defaults to today.
+        limit: Number of top tickers. Defaults to 25.
+    """
+    try:
+        fd, td = normalize_date_range(from_date, to_date, max_span_days=31)
+        lim = normalize_limit(limit, default=25, maximum=100)
+        from civicledger.aggregates import insider_leaderboard
+        data = await insider_leaderboard(fd, td, limit=lim)
+        if not data:
+            return f"No insider trades found between {fd} and {td}."
+        return _format_result(data, f"Top {len(data)} tickers by insider activity, {fd} to {td}")
+    except ValidationError as e:
+        return f"Invalid input: {e}"
+    except Exception as e:
+        return _tool_error("get_insider_leaderboard", e)
+
+
+# ---------------------------------------------------------------------------
+# Tool 14 & 15: Filing Search + Company Filing Feed
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def search_filings(
+    query: str,
+    forms: str | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+    limit: int = 50,
+) -> str:
+    """Full-text search across all SEC EDGAR filings.
+
+    Find any filing mentioning a phrase — e.g. "going concern", a product
+    name, an executive, or a risk factor — across every public company.
+
+    Source: SEC EDGAR full-text search (EFTS). Public domain.
+
+    Args:
+        query: Search phrase. Required.
+        forms: Optional comma-separated form types (e.g., "8-K,10-K").
+        from_date: Optional start date (YYYY-MM-DD).
+        to_date: Optional end date (YYYY-MM-DD).
+        limit: Max results. Defaults to 50.
+    """
+    try:
+        if not query or len(query.strip()) < 2:
+            raise ValidationError("query must be at least 2 characters.")
+        fd = normalize_date_range(from_date, to_date, default_lookback_days=3650)[0] if (from_date or to_date) else None
+        td = normalize_date_range(from_date, to_date, default_lookback_days=3650)[1] if (from_date or to_date) else None
+        lim = normalize_limit(limit, default=50, maximum=100)
+        from civicledger.edgar.filings import search_filings as _search
+        data = await _search(query.strip(), forms=forms, from_date=fd, to_date=td, limit=lim)
+        if not data:
+            return f"No filings found matching '{query}'."
+        return _format_result(data, f"{len(data)} filings matching '{query}'")
+    except ValidationError as e:
+        return f"Invalid input: {e}"
+    except Exception as e:
+        return _tool_error("search_filings", e)
+
+
+@mcp.tool()
+async def get_company_filings(ticker: str, form: str | None = None, limit: int = 40) -> str:
+    """Fetch a company's recent SEC filings (any form type) with direct links.
+
+    Args:
+        ticker: Stock ticker (e.g., "AAPL"). Required.
+        form: Optional form filter (e.g., "8-K", "10-K", "4").
+        limit: Max filings. Defaults to 40.
+    """
+    try:
+        tk = normalize_ticker(ticker)
+        lim = normalize_limit(limit, default=40, maximum=200)
+        from civicledger.edgar.filings import fetch_company_filings
+        data = await fetch_company_filings(tk, form=form, limit=lim)
+        if not data:
+            return f"No filings found for {tk}{f' (form {form})' if form else ''}."
+        return _format_result(data, f"{len(data)} filings for {tk}" + (f" (form {form})" if form else ""))
+    except ValidationError as e:
+        return f"Invalid input: {e}"
+    except Exception as e:
+        return _tool_error("get_company_filings", e)
+
+
+# ---------------------------------------------------------------------------
 # Server entry point
 # ---------------------------------------------------------------------------
 

@@ -85,13 +85,18 @@ Responses are cached locally on disk (`~/.cache/civicledger`, configurable via
 `civicledger cache clear`, or disable with `CIVICLEDGER_CACHE_ENABLED=false`.
 
 Endpoints:
+- `GET /ticker/{symbol}` — **Unified profile**: fundamentals + insider + 13F holders + congress + filings in one call
 - `GET /fundamentals` — All company fundamentals
-- `GET /fundamentals/{ticker}` — Single company
+- `GET /fundamentals/{ticker}` — Single company (fast `companyfacts` path)
 - `GET /earnings?from_date=...&to_date=...` — Earnings calendar
 - `GET /insider-trades?ticker=AAPL` — Insider transactions
 - `GET /insider-trades/{ticker}` — Detailed insider trades
 - `GET /institutions` — Top institutional investors
 - `GET /institutions/{manager}` — 13F holdings for a manager
+- `GET /institutions/{manager}/changes` — Quarter-over-quarter buys/sells (new/exited/increased/decreased)
+- `GET /trending/congress` · `GET /trending/insider` — Leaderboards: most-traded tickers
+- `GET /search?q=...` — Full-text search across all EDGAR filings
+- `GET /filings/{ticker}` — Recent filings for a company (any form), with links
 - `GET /congress?detailed=true` — House stock trades (`detailed=true` parses PTR PDFs for ticker/amount/type)
 - `GET /congress/house?detailed=true` — House trades only
 - `GET /economic-events` — FRED economic calendar (requires a free FRED API key)

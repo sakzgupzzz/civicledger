@@ -35,6 +35,10 @@ _TTL_EARNINGS = 3600       # 1h
 _TTL_INSIDER = 1800        # 30m
 _TTL_MATERIAL = 3600       # 1h
 _TTL_ECONOMIC = 21600      # 6h
+_TTL_PROFILE = 3600        # 1h
+_TTL_TRENDING = 3600       # 1h
+_TTL_SEARCH = 1800         # 30m
+_TTL_FILINGS = 3600        # 1h
 
 ATTRIBUTION = (
     "This product uses the FRED API but is not endorsed or certified by the "
@@ -310,6 +314,123 @@ def create_app() -> FastAPI:
             "events": data,
             "attribution": ATTRIBUTION,
         }
+
+    # ── Unified ticker profile ──
+
+    @app.get("/ticker/{symbol}")
+    async def get_ticker_profile(symbol: str):
+        """One call merging fundamentals, insider trades, filings, congress, and 13F holders."""
+        from civicledger.profile import fetch_ticker_profile
+        try:
+            tk = normalize_ticker(symbol)
+        except ValidationError as e:
+            raise _bad_request(e)
+        try:
+            return await cached(f"profile/{tk}", _TTL_PROFILE, lambda: fetch_ticker_profile(tk))
+        except Exception as e:  # noqa: BLE001
+            raise _upstream_error("ticker-profile", e)
+
+    # ── 13F quarter-over-quarter changes ──
+
+    @app.get("/institutions/{manager}/changes")
+    async def get_institution_changes(manager: str, limit: int = Query(default=50, le=200)):
+        """Positions a manager opened, exited, added to, or trimmed vs last quarter."""
+        from civicledger.edgar.institutional import fetch_holdings_changes
+        lim = normalize_limit(limit, default=50, maximum=200)
+        try:
+            data = await cached(
+                f"changes/{manager}/{lim}", _TTL_INSTITUTIONS,
+                lambda: fetch_holdings_changes(manager, limit=lim),
+            )
+        except Exception as e:  # noqa: BLE001
+            raise _upstream_error("institution-changes", e)
+        if isinstance(data, dict) and data.get("error"):
+            raise HTTPException(status_code=404, detail=data["error"])
+        return data
+
+    # ── Trending / leaderboards ──
+
+    @app.get("/trending/congress")
+    async def trending_congress(year: Optional[int] = None, limit: int = Query(default=25, le=100)):
+        """Most-traded tickers by US House members."""
+        from civicledger.aggregates import congress_leaderboard
+        try:
+            yr = normalize_year(year)
+        except ValidationError as e:
+            raise _bad_request(e)
+        try:
+            data = await congress_leaderboard(year=yr, limit=normalize_limit(limit, default=25, maximum=100))
+        except Exception as e:  # noqa: BLE001
+            raise _upstream_error("trending-congress", e)
+        return {"year": yr, "count": len(data), "tickers": data}
+
+    @app.get("/trending/insider")
+    async def trending_insider(
+        from_date: str = Query(default=None),
+        to_date: str = Query(default=None),
+        limit: int = Query(default=25, le=100),
+    ):
+        """Tickers with the most insider buying / selling over a window."""
+        from civicledger.aggregates import insider_leaderboard
+        try:
+            f, t = normalize_date_range(from_date, to_date, default_lookback_days=7, max_span_days=31)
+        except ValidationError as e:
+            raise _bad_request(e)
+        try:
+            data = await insider_leaderboard(f, t, limit=normalize_limit(limit, default=25, maximum=100))
+        except Exception as e:  # noqa: BLE001
+            raise _upstream_error("trending-insider", e)
+        return {"from_date": f, "to_date": t, "count": len(data), "tickers": data}
+
+    # ── Filing search + per-company feed ──
+
+    @app.get("/search")
+    async def search_filings_endpoint(
+        q: str = Query(..., min_length=2, description="Full-text search phrase"),
+        forms: Optional[str] = Query(default=None, description="Comma-separated form types, e.g. 8-K,10-K"),
+        from_date: str = Query(default=None),
+        to_date: str = Query(default=None),
+        limit: int = Query(default=50, le=100),
+    ):
+        """Full-text search across all EDGAR filings."""
+        from civicledger.edgar.filings import search_filings
+        f = t = None
+        if from_date or to_date:
+            try:
+                f, t = normalize_date_range(from_date, to_date, default_lookback_days=3650)
+            except ValidationError as e:
+                raise _bad_request(e)
+        lim = normalize_limit(limit, default=50, maximum=100)
+        try:
+            data = await cached(
+                f"search/{q}/{forms}/{f}/{t}/{lim}", _TTL_SEARCH,
+                lambda: search_filings(q, forms=forms, from_date=f, to_date=t, limit=lim),
+            )
+        except Exception as e:  # noqa: BLE001
+            raise _upstream_error("search", e)
+        return {"query": q, "count": len(data), "results": data}
+
+    @app.get("/filings/{ticker}")
+    async def get_company_filings_endpoint(
+        ticker: str,
+        form: Optional[str] = Query(default=None, description="Form filter, e.g. 8-K, 10-K, 4"),
+        limit: int = Query(default=40, le=200),
+    ):
+        """Recent filings for a company, any form type, with direct links."""
+        from civicledger.edgar.filings import fetch_company_filings
+        try:
+            tk = normalize_ticker(ticker)
+        except ValidationError as e:
+            raise _bad_request(e)
+        lim = normalize_limit(limit, default=40, maximum=200)
+        try:
+            data = await cached(
+                f"filings/{tk}/{form}/{lim}", _TTL_FILINGS,
+                lambda: fetch_company_filings(tk, form=form, limit=lim),
+            )
+        except Exception as e:  # noqa: BLE001
+            raise _upstream_error("company-filings", e)
+        return {"ticker": tk, "form": form, "count": len(data), "filings": data}
 
     # ── Material Events ──
 
