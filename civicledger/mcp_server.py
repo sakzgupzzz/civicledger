@@ -17,12 +17,20 @@ All data sourced from US government APIs. Public domain.
 """
 
 import json
-import traceback
-from datetime import date, timedelta
 from typing import Any
 
 from loguru import logger
 from mcp.server.fastmcp import FastMCP
+
+from civicledger.economic.fred import FredApiKeyMissing
+from civicledger.validation import (
+    ValidationError,
+    normalize_8k_item,
+    normalize_date_range,
+    normalize_limit,
+    normalize_ticker,
+    normalize_year,
+)
 
 mcp = FastMCP(
     "CivicLedger",
@@ -46,12 +54,10 @@ def _format_result(data: Any, summary: str | None = None) -> str:
     return json.dumps(data, indent=2, default=str)
 
 
-def _default_from_date() -> str:
-    return (date.today() - timedelta(days=7)).isoformat()
-
-
-def _default_to_date() -> str:
-    return date.today().isoformat()
+def _tool_error(name: str, e: Exception) -> str:
+    """Log the full traceback server-side; return a clean message to the model."""
+    logger.opt(exception=True).error(f"{name} failed: {e}")
+    return f"Error in {name}: {e}"
 
 
 async def _try_dynamo_first(fetch_from_dynamo, fetch_live, source_name: str):
@@ -98,7 +104,7 @@ async def get_fundamentals(ticker: str | None = None) -> str:
     """
     try:
         if ticker:
-            ticker_upper = ticker.upper()
+            ticker_upper = normalize_ticker(ticker)
 
             # Try DynamoDB first for single ticker
             async def _from_dynamo():
@@ -106,9 +112,8 @@ async def get_fundamentals(ticker: str | None = None) -> str:
                 return await storage.get_item(f"FUND#{ticker_upper}", "LATEST")
 
             async def _from_live():
-                from civicledger.edgar.fundamentals import fetch_fundamentals
-                data = await fetch_fundamentals()
-                return data.get(ticker_upper) if data else None
+                from civicledger.edgar.fundamentals import fetch_fundamentals_for_ticker
+                return await fetch_fundamentals_for_ticker(ticker_upper)
 
             data = await _try_dynamo_first(_from_dynamo, _from_live, f"fundamentals/{ticker_upper}")
 
@@ -163,8 +168,10 @@ async def get_fundamentals(ticker: str | None = None) -> str:
             )
         return "No fundamentals data available. The EDGAR XBRL API may be temporarily unavailable."
 
+    except ValidationError as e:
+        return f"Invalid input: {e}"
     except Exception as e:
-        return f"Error fetching fundamentals: {e}\n{traceback.format_exc()}"
+        return _tool_error("get_fundamentals", e)
 
 
 # ---------------------------------------------------------------------------
@@ -189,8 +196,7 @@ async def get_earnings_calendar(
         to_date: End date in YYYY-MM-DD format. Defaults to today.
     """
     try:
-        fd = from_date or _default_from_date()
-        td = to_date or _default_to_date()
+        fd, td = normalize_date_range(from_date, to_date)
 
         async def _from_dynamo():
             from civicledger import storage
@@ -219,8 +225,10 @@ async def get_earnings_calendar(
             f"{len(data)} earnings announcements from {fd} to {td}",
         )
 
+    except ValidationError as e:
+        return f"Invalid input: {e}"
     except Exception as e:
-        return f"Error fetching earnings calendar: {e}\n{traceback.format_exc()}"
+        return _tool_error("get_earnings_calendar", e)
 
 
 # ---------------------------------------------------------------------------
@@ -247,8 +255,8 @@ async def get_insider_trades(
         ticker: Optional — filter to a specific stock ticker (e.g., "TSLA").
     """
     try:
-        fd = from_date or _default_from_date()
-        td = to_date or _default_to_date()
+        fd, td = normalize_date_range(from_date, to_date, max_span_days=92)
+        tk = normalize_ticker(ticker) if ticker else None
 
         async def _from_dynamo():
             from civicledger import storage
@@ -258,28 +266,30 @@ async def get_insider_trades(
                 item.pop("_sk", None)
                 item_date = item.get("filing_date", "")
                 if fd <= item_date <= td:
-                    if ticker and item.get("ticker") != ticker.upper():
+                    if tk and item.get("ticker") != tk:
                         continue
                     filtered.append(item)
             return filtered if filtered else None
 
         async def _from_live():
             from civicledger.edgar.insider_trades import fetch_recent_insider_trades
-            return await fetch_recent_insider_trades(fd, td, ticker=ticker)
+            return await fetch_recent_insider_trades(fd, td, ticker=tk)
 
         data = await _try_dynamo_first(_from_dynamo, _from_live, "insider_trades")
 
         if not data:
-            filter_msg = f" for {ticker.upper()}" if ticker else ""
+            filter_msg = f" for {tk}" if tk else ""
             return f"No insider trades found{filter_msg} between {fd} and {td}."
 
         return _format_result(
             data,
-            f"{len(data)} insider trade filings from {fd} to {td}" + (f" (filtered to {ticker.upper()})" if ticker else ""),
+            f"{len(data)} insider trade filings from {fd} to {td}" + (f" (filtered to {tk})" if tk else ""),
         )
 
+    except ValidationError as e:
+        return f"Invalid input: {e}"
     except Exception as e:
-        return f"Error fetching insider trades: {e}\n{traceback.format_exc()}"
+        return _tool_error("get_insider_trades", e)
 
 
 # ---------------------------------------------------------------------------
@@ -304,22 +314,26 @@ async def get_insider_trades_detailed(
         limit: Maximum number of trades to return. Defaults to 50.
     """
     try:
+        tk = normalize_ticker(ticker)
+        lim = normalize_limit(limit, default=50, maximum=500)
         # Detailed trades are per-ticker and require parsing Form 4 XML.
         # Not practical to pre-fetch for all tickers, so this always goes live.
         from civicledger.edgar.insider_trades import fetch_insider_trades_detailed
 
-        data = await fetch_insider_trades_detailed(ticker, limit=limit)
+        data = await fetch_insider_trades_detailed(tk, limit=lim)
 
         if not data:
-            return f"No detailed insider trades found for {ticker.upper()}. The company may not have recent Form 4 filings."
+            return f"No detailed insider trades found for {tk}. The company may not have recent Form 4 filings."
 
         return _format_result(
             data,
-            f"{len(data)} insider trades for {ticker.upper()}",
+            f"{len(data)} insider transactions for {tk}",
         )
 
+    except ValidationError as e:
+        return f"Invalid input: {e}"
     except Exception as e:
-        return f"Error fetching detailed insider trades: {e}\n{traceback.format_exc()}"
+        return _tool_error("get_insider_trades_detailed", e)
 
 
 # ---------------------------------------------------------------------------
@@ -344,6 +358,10 @@ async def get_institutional_holdings(
         limit: Maximum number of holdings to return. Defaults to 100.
     """
     try:
+        if not manager or not manager.strip():
+            raise ValidationError("manager is required (a fund name or CIK).")
+        manager = manager.strip()
+        limit = normalize_limit(limit, default=100, maximum=1000)
         # Try DynamoDB for known institutions
         safe_name = manager.replace(" ", "").replace("#", "")
 
@@ -373,8 +391,10 @@ async def get_institutional_holdings(
             f"${data.get('total_value_millions', '?')}M across {data.get('holdings_count', '?')} positions",
         )
 
+    except ValidationError as e:
+        return f"Invalid input: {e}"
     except Exception as e:
-        return f"Error fetching institutional holdings: {e}\n{traceback.format_exc()}"
+        return _tool_error("get_institutional_holdings", e)
 
 
 # ---------------------------------------------------------------------------
@@ -428,7 +448,7 @@ async def get_top_institutions() -> str:
         )
 
     except Exception as e:
-        return f"Error fetching top institutions: {e}\n{traceback.format_exc()}"
+        return _tool_error("get_top_institutions", e)
 
 
 # ---------------------------------------------------------------------------
@@ -458,8 +478,8 @@ async def get_material_events(
                      "7.01" (Reg FD disclosure), "8.01" (other events).
     """
     try:
-        fd = from_date or _default_from_date()
-        td = to_date or _default_to_date()
+        fd, td = normalize_date_range(from_date, to_date)
+        item_filter = normalize_8k_item(item_filter)
 
         async def _from_dynamo():
             from civicledger import storage
@@ -489,8 +509,10 @@ async def get_material_events(
             f"{len(data)} material events from {fd} to {td}" + (f" (filtered to item {item_filter})" if item_filter else ""),
         )
 
+    except ValidationError as e:
+        return f"Invalid input: {e}"
     except Exception as e:
-        return f"Error fetching material events: {e}\n{traceback.format_exc()}"
+        return _tool_error("get_material_events", e)
 
 
 # ---------------------------------------------------------------------------
@@ -501,26 +523,36 @@ async def get_material_events(
 async def get_congressional_trades(
     year: int | None = None,
     limit: int = 200,
+    detailed: bool = False,
 ) -> str:
-    """Fetch stock trades by members of US Congress (Senate and House).
+    """Fetch stock trades by members of the US House of Representatives.
 
     Under the STOCK Act (2012), members of Congress must disclose stock
     trades within 45 days. Returns Periodic Transaction Reports (PTRs)
-    from both chambers.
+    from the House clerk's bulk disclosures.
 
-    Source: Senate eFD (efdsearch.senate.gov) and House clerk disclosures
-    (disclosures-clerk.house.gov). Public domain.
+    Note: Senate trades are NOT available — the Senate eFD site
+    (efdsearch.senate.gov) blocks automated access. This returns House data only.
+
+    Source: House clerk disclosures (disclosures-clerk.house.gov). Public domain.
 
     Args:
         year: Year to search. Defaults to the current year.
-        limit: Maximum results per chamber. Defaults to 200.
+        limit: Maximum results. Defaults to 200.
+        detailed: When True, parse the PTR PDFs to return real per-transaction
+                  detail (ticker, transaction type, amount range, dates).
+                  Slower, since it downloads and parses individual filings.
     """
     try:
-        yr = year or date.today().year
+        yr = normalize_year(year)
+        lim = normalize_limit(limit, default=200, maximum=1000)
 
         async def _from_dynamo():
+            # Detailed results aren't pre-cached; force a live parse.
+            if detailed:
+                return None
             from civicledger import storage
-            items = await storage.query("CONGRESS", sk_prefix=str(yr), limit=limit * 2)
+            items = await storage.query("CONGRESS", sk_prefix=str(yr), limit=lim)
             cleaned = []
             for item in items:
                 item.pop("_sk", None)
@@ -529,23 +561,24 @@ async def get_congressional_trades(
 
         async def _from_live():
             from civicledger.congress.trades import fetch_all_congressional_trades
-            return await fetch_all_congressional_trades(year=yr, limit=limit)
+            return await fetch_all_congressional_trades(year=yr, limit=lim, detailed=detailed)
 
         data = await _try_dynamo_first(_from_dynamo, _from_live, f"congress/{yr}")
 
         if not data:
             return f"No congressional trades found for {yr}."
 
-        senate_count = sum(1 for t in data if t.get("chamber") == "senate")
-        house_count = sum(1 for t in data if t.get("chamber") == "house")
-
         return _format_result(
-            data[:limit * 2],
-            f"{len(data)} congressional trades for {yr} ({senate_count} Senate, {house_count} House)",
+            data[:lim],
+            f"{len(data)} House trades for {yr}"
+            + (" (with transaction detail)" if detailed else "")
+            + " — Senate unavailable (eFD blocks automation).",
         )
 
+    except ValidationError as e:
+        return f"Invalid input: {e}"
     except Exception as e:
-        return f"Error fetching congressional trades: {e}\n{traceback.format_exc()}"
+        return _tool_error("get_congressional_trades", e)
 
 
 # ---------------------------------------------------------------------------
@@ -576,8 +609,7 @@ async def get_economic_calendar(
         to_date: End date in YYYY-MM-DD format. Defaults to today.
     """
     try:
-        fd = from_date or _default_from_date()
-        td = to_date or _default_to_date()
+        fd, td = normalize_date_range(from_date, to_date)
 
         async def _from_dynamo():
             from civicledger import storage
@@ -598,9 +630,7 @@ async def get_economic_calendar(
 
         if not data:
             return (
-                f"No economic events found between {fd} and {td}. "
-                "This may mean no major releases are scheduled in that window, "
-                "or the CIVICLEDGER_FRED_API_KEY environment variable is not set."
+                f"No major economic releases are scheduled between {fd} and {td}."
             )
 
         return _format_result(
@@ -608,8 +638,12 @@ async def get_economic_calendar(
             f"{len(data)} economic events from {fd} to {td}",
         )
 
+    except FredApiKeyMissing as e:
+        return str(e)
+    except ValidationError as e:
+        return f"Invalid input: {e}"
     except Exception as e:
-        return f"Error fetching economic calendar: {e}\n{traceback.format_exc()}"
+        return _tool_error("get_economic_calendar", e)
 
 
 # ---------------------------------------------------------------------------

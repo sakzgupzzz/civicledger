@@ -7,12 +7,85 @@ Source: https://data.sec.gov/api/xbrl/frames/
 Public domain. No API key required. Rate limit: 10 req/sec.
 """
 
+import re
 from datetime import date
 from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 
 from civicledger.edgar._client import edgar_get, get_ticker_cik_map
+
+# Concept keys carried through the computation, in record order.
+_RECORD_KEYS = [
+    "Revenues", "NetIncomeLoss", "GrossProfit", "OperatingIncomeLoss",
+    "EarningsPerShareBasic", "CommonStockDividendsPerShareDeclared",
+    "Assets", "Liabilities", "StockholdersEquity", "AssetsCurrent",
+    "LiabilitiesCurrent", "CommonStockSharesOutstanding", "Inventories",
+]
+
+
+def _build_record(v: Dict[str, Optional[float]], yoy: Dict[str, Optional[float]]) -> Dict[str, Any]:
+    """Compute a fundamentals record (raw values + ratios + growth) from a
+    dict of concept -> latest value and a YoY dict (Revenues, NetIncomeLoss).
+    Shared by the bulk-frames path and the single-ticker companyfacts path.
+    """
+    rev = v.get("Revenues")
+    ni = v.get("NetIncomeLoss")
+    gp = v.get("GrossProfit")
+    oi = v.get("OperatingIncomeLoss")
+    eps = v.get("EarningsPerShareBasic")
+    dps = v.get("CommonStockDividendsPerShareDeclared")
+    assets = v.get("Assets")
+    liab = v.get("Liabilities")
+    equity = v.get("StockholdersEquity")
+    ca = v.get("AssetsCurrent")
+    cl = v.get("LiabilitiesCurrent")
+    shares = v.get("CommonStockSharesOutstanding")
+    inventory = v.get("Inventories")
+
+    record: Dict[str, Any] = {}
+    for key, val in [
+        ("revenue", rev), ("net_income", ni), ("gross_profit", gp),
+        ("operating_income", oi), ("eps", eps), ("dividends_per_share", dps),
+        ("total_assets", assets), ("total_liabilities", liab),
+        ("stockholders_equity", equity), ("current_assets", ca),
+        ("current_liabilities", cl), ("shares_outstanding", shares),
+        ("inventory", inventory),
+    ]:
+        if val is not None:
+            record[key] = val
+
+    if rev and rev > 0:
+        if ni is not None:
+            record["profit_margin"] = round(ni / rev, 4)
+        if gp is not None:
+            record["gross_margin"] = round(gp / rev, 4)
+        if oi is not None:
+            record["operating_margin"] = round(oi / rev, 4)
+        if shares and shares > 0:
+            record["revenue_per_share"] = round(rev / shares, 2)
+
+    if ni is not None:
+        if equity and equity > 0:
+            record["return_on_equity"] = round(ni / equity, 4)
+        if assets and assets > 0:
+            record["return_on_assets"] = round(ni / assets, 4)
+
+    if equity and equity > 0 and liab is not None:
+        record["debt_to_equity"] = round(liab / equity, 2)
+    if cl and cl > 0 and ca is not None:
+        record["current_ratio"] = round(ca / cl, 2)
+        inv = inventory if inventory is not None else 0
+        record["quick_ratio"] = round((ca - inv) / cl, 2)
+
+    rev_yoy = yoy.get("Revenues")
+    ni_yoy = yoy.get("NetIncomeLoss")
+    if rev and rev_yoy and rev_yoy > 0:
+        record["revenue_growth"] = round((rev / rev_yoy) - 1, 4)
+    if ni and ni_yoy and ni_yoy > 0:
+        record["earnings_growth"] = round((ni / ni_yoy) - 1, 4)
+
+    return record
 
 # Duration concepts (income/cash flow): use CYyyyyQq format
 DURATION_CONCEPTS = [
@@ -146,87 +219,133 @@ async def fetch_fundamentals() -> Dict[str, Dict[str, Any]]:
         if not tickers:
             continue
 
-        rev = recent_data.get("Revenues", {}).get(cik)
-        ni = recent_data.get("NetIncomeLoss", {}).get(cik)
-        gp = recent_data.get("GrossProfit", {}).get(cik)
-        oi = recent_data.get("OperatingIncomeLoss", {}).get(cik)
-        eps = recent_data.get("EarningsPerShareBasic", {}).get(cik)
-        dps = recent_data.get("CommonStockDividendsPerShareDeclared", {}).get(cik)
-        assets = recent_data.get("Assets", {}).get(cik)
-        liab = recent_data.get("Liabilities", {}).get(cik)
-        equity = recent_data.get("StockholdersEquity", {}).get(cik)
-        ca = recent_data.get("AssetsCurrent", {}).get(cik)
-        cl = recent_data.get("LiabilitiesCurrent", {}).get(cik)
-        shares = recent_data.get("CommonStockSharesOutstanding", {}).get(cik)
-        inventory = recent_data.get("Inventories", {}).get(cik)
-
-        record: Dict[str, Any] = {"cik": cik}
-
-        # Raw values
-        if rev is not None:
-            record["revenue"] = rev
-        if ni is not None:
-            record["net_income"] = ni
-        if gp is not None:
-            record["gross_profit"] = gp
-        if oi is not None:
-            record["operating_income"] = oi
-        if eps is not None:
-            record["eps"] = eps
-        if dps is not None:
-            record["dividends_per_share"] = dps
-        if assets is not None:
-            record["total_assets"] = assets
-        if liab is not None:
-            record["total_liabilities"] = liab
-        if equity is not None:
-            record["stockholders_equity"] = equity
-        if ca is not None:
-            record["current_assets"] = ca
-        if cl is not None:
-            record["current_liabilities"] = cl
-        if shares is not None:
-            record["shares_outstanding"] = shares
-        if inventory is not None:
-            record["inventory"] = inventory
-
-        # Margin ratios
-        if rev and rev > 0:
-            if ni is not None:
-                record["profit_margin"] = round(ni / rev, 4)
-            if gp is not None:
-                record["gross_margin"] = round(gp / rev, 4)
-            if oi is not None:
-                record["operating_margin"] = round(oi / rev, 4)
-            if shares and shares > 0:
-                record["revenue_per_share"] = round(rev / shares, 2)
-
-        # Return ratios
-        if ni is not None:
-            if equity and equity > 0:
-                record["return_on_equity"] = round(ni / equity, 4)
-            if assets and assets > 0:
-                record["return_on_assets"] = round(ni / assets, 4)
-
-        # Leverage ratios
-        if equity and equity > 0 and liab is not None:
-            record["debt_to_equity"] = round(liab / equity, 2)
-        if cl and cl > 0 and ca is not None:
-            record["current_ratio"] = round(ca / cl, 2)
-            inv = inventory if inventory is not None else 0
-            record["quick_ratio"] = round((ca - inv) / cl, 2)
-
-        # Growth (YoY quarterly)
-        rev_yoy = yoy_data.get("Revenues", {}).get(cik)
-        ni_yoy = yoy_data.get("NetIncomeLoss", {}).get(cik)
-        if rev and rev_yoy and rev_yoy > 0:
-            record["revenue_growth"] = round((rev / rev_yoy) - 1, 4)
-        if ni and ni_yoy and ni_yoy > 0:
-            record["earnings_growth"] = round((ni / ni_yoy) - 1, 4)
-
-        if len(record) > 1:  # more than just cik
+        vals = {k: recent_data.get(k, {}).get(cik) for k in _RECORD_KEYS}
+        yoy = {
+            "Revenues": yoy_data.get("Revenues", {}).get(cik),
+            "NetIncomeLoss": yoy_data.get("NetIncomeLoss", {}).get(cik),
+        }
+        record = _build_record(vals, yoy)
+        if record:  # has at least one metric
+            record["cik"] = cik
             for ticker in tickers:
                 results[ticker] = dict(record)
 
     logger.info(f"EDGAR fundamentals: computed metrics for {len(results)} tickers")
     return results
+
+
+# ---------------------------------------------------------------------------
+# Single-ticker fast path — one companyfacts call instead of ~20 frame calls
+# ---------------------------------------------------------------------------
+
+# (concept key, [us-gaap/dei tags], unit, instant)
+_TICKER_SPECS: List[Tuple[str, List[str], str, bool]] = [
+    ("Revenues", ["Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax"], "USD", False),
+    ("NetIncomeLoss", ["NetIncomeLoss", "ProfitLoss"], "USD", False),
+    ("GrossProfit", ["GrossProfit"], "USD", False),
+    ("OperatingIncomeLoss", ["OperatingIncomeLoss"], "USD", False),
+    ("EarningsPerShareBasic", ["EarningsPerShareBasic", "EarningsPerShareDiluted"], "USD/shares", False),
+    ("CommonStockDividendsPerShareDeclared",
+     ["CommonStockDividendsPerShareDeclared", "CommonStockDividendsPerShareCashPaid"], "USD/shares", False),
+    ("Assets", ["Assets"], "USD", True),
+    ("Liabilities", ["Liabilities"], "USD", True),
+    ("StockholdersEquity",
+     ["StockholdersEquity", "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"], "USD", True),
+    ("AssetsCurrent", ["AssetsCurrent"], "USD", True),
+    ("LiabilitiesCurrent", ["LiabilitiesCurrent"], "USD", True),
+    ("CommonStockSharesOutstanding",
+     ["CommonStockSharesOutstanding", "EntityCommonStockSharesOutstanding"], "shares", True),
+    ("Inventories", ["Inventories", "InventoryNet"], "USD", True),
+]
+
+_FRAME_Q = re.compile(r"^CY(\d{4})Q([1-4])$")
+_FRAME_QI = re.compile(r"^CY(\d{4})Q([1-4])I$")
+
+
+def _pick_quarter(entries: List[dict], instant: bool, target: Optional[str] = None) -> Optional[float]:
+    """From companyfacts unit entries, pick the value for ``target`` frame, else
+    the most recent quarterly frame. Only frame-tagged (cross-comparable)
+    quarterly values are considered, mirroring the bulk frames path.
+    """
+    rx = _FRAME_QI if instant else _FRAME_Q
+    by_frame: Dict[str, float] = {}
+    best: Optional[Tuple[int, int, float]] = None
+    for e in entries:
+        frame = e.get("frame")
+        val = e.get("val")
+        if not frame or val is None:
+            continue
+        m = rx.match(frame)
+        if not m:
+            continue
+        by_frame[frame] = val
+        y, q = int(m.group(1)), int(m.group(2))
+        if best is None or (y, q) > (best[0], best[1]):
+            best = (y, q, val)
+    if target and target in by_frame:
+        return by_frame[target]
+    return best[2] if best else None
+
+
+async def fetch_fundamentals_for_ticker(ticker: str) -> Optional[Dict[str, Any]]:
+    """Fetch fundamentals for ONE ticker via the EDGAR companyfacts API.
+
+    A single HTTP call (plus the cached ticker->CIK map) instead of the ~20
+    cross-company frame calls in fetch_fundamentals(). Returns the same metric
+    schema, plus ``company`` and ``period``, or None if the ticker has no data.
+    """
+    tk = ticker.upper()
+    cik_map = await get_ticker_cik_map()
+    cik = cik_map.get(tk)
+    if not cik:
+        logger.debug(f"fundamentals: no CIK for {tk}")
+        return None
+
+    facts = await edgar_get(f"/api/xbrl/companyfacts/CIK{cik:010d}.json")
+    if not facts:
+        return None
+
+    namespaces = facts.get("facts", {})
+
+    def entries_for(tags: List[str], unit: str) -> List[dict]:
+        out: List[dict] = []
+        for ns in ("us-gaap", "dei"):
+            block = namespaces.get(ns, {})
+            for tag in tags:
+                units = block.get(tag, {}).get("units", {})
+                out.extend(units.get(unit, []))
+        return out
+
+    # Anchor on revenue's most recent quarterly frame so other concepts align.
+    rev_entries = entries_for(_TICKER_SPECS[0][1], "USD")
+    rev_frame: Optional[str] = None
+    best: Optional[Tuple[int, int]] = None
+    for e in rev_entries:
+        m = _FRAME_Q.match(e.get("frame") or "")
+        if m and e.get("val") is not None:
+            yq = (int(m.group(1)), int(m.group(2)))
+            if best is None or yq > best:
+                best, rev_frame = yq, e["frame"]
+
+    vals: Dict[str, Optional[float]] = {}
+    for key, tags, unit, instant in _TICKER_SPECS:
+        target = (rev_frame + "I" if instant else rev_frame) if rev_frame else None
+        vals[key] = _pick_quarter(entries_for(tags, unit), instant, target=target)
+
+    yoy: Dict[str, Optional[float]] = {}
+    if best:
+        yoy_frame = f"CY{best[0] - 1}Q{best[1]}"
+        yoy["Revenues"] = _pick_quarter(rev_entries, False, target=yoy_frame)
+        yoy["NetIncomeLoss"] = _pick_quarter(
+            entries_for(_TICKER_SPECS[1][1], "USD"), False, target=yoy_frame
+        )
+
+    record = _build_record(vals, yoy)
+    if not record:
+        return None
+    record["cik"] = cik
+    record["company"] = facts.get("entityName")
+    if rev_frame:
+        record["period"] = rev_frame
+    logger.info(f"EDGAR fundamentals (single): {tk} — {len(record)} fields")
+    return record

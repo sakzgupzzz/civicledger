@@ -15,6 +15,11 @@ import httpx
 from loguru import logger
 
 from civicledger.config import get_settings
+from civicledger.validation import iter_months
+
+
+class FredApiKeyMissing(RuntimeError):
+    """Raised when a FRED-backed call is made without an API key configured."""
 
 # FRED release IDs for tracked macro indicators
 TRACKED_RELEASES = {
@@ -109,53 +114,59 @@ async def fetch_economic_events(
     settings = get_settings()
     api_key = settings.fred_api_key
     if not api_key:
-        logger.warning("FRED_API_KEY not set — skipping economic events")
-        return []
+        raise FredApiKeyMissing(
+            "FRED API key not set. Get a free key at "
+            "https://fred.stlouisfed.org/docs/api/api_key.html and set "
+            "CIVICLEDGER_FRED_API_KEY."
+        )
 
-    # Determine month range
-    from_parts = from_date.split("-")
-    year, month = int(from_parts[0]), int(from_parts[1])
-    last_day = monthrange(year, month)[1]
-    start = f"{year}-{month:02d}-01"
-    end = f"{year}-{month:02d}-{last_day:02d}"
-
+    # Query each month spanning the range. The FRED releases/dates endpoint
+    # filters by realtime window, so a single month query would silently drop
+    # events in any other month the range touches.
     tracked_ids = set(TRACKED_RELEASES.keys())
+    events: List[Dict[str, Any]] = []
+    seen: set = set()
 
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(
-                "https://api.stlouisfed.org/fred/releases/dates",
-                params={
-                    "api_key": api_key,
-                    "file_type": "json",
-                    "realtime_start": start,
-                    "realtime_end": end,
-                    "include_release_dates_with_no_data": "true",
-                    "sort_order": "asc",
-                    "limit": 1000,
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
+        async with httpx.AsyncClient(timeout=15) as client:
+            for year, month in iter_months(from_date, to_date):
+                last_day = monthrange(year, month)[1]
+                resp = await client.get(
+                    "https://api.stlouisfed.org/fred/releases/dates",
+                    params={
+                        "api_key": api_key,
+                        "file_type": "json",
+                        "realtime_start": f"{year}-{month:02d}-01",
+                        "realtime_end": f"{year}-{month:02d}-{last_day:02d}",
+                        "include_release_dates_with_no_data": "true",
+                        "sort_order": "asc",
+                        "limit": 1000,
+                    },
+                )
+                resp.raise_for_status()
+                for d in resp.json().get("release_dates", []):
+                    rid = d.get("release_id")
+                    event_date = d.get("date", "")
+                    if rid in tracked_ids and from_date <= event_date <= to_date:
+                        key = (rid, event_date)
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        meta = TRACKED_RELEASES[rid]
+                        events.append({
+                            "name": meta["name"],
+                            "date": event_date,
+                            "impact": meta["impact"],
+                            "description": meta["description"],
+                            "source": "FRED",
+                        })
 
-        events: List[Dict[str, Any]] = []
-        for d in data.get("release_dates", []):
-            rid = d.get("release_id")
-            if rid in tracked_ids:
-                meta = TRACKED_RELEASES[rid]
-                event_date = d["date"]
-                if from_date <= event_date <= to_date:
-                    events.append({
-                        "name": meta["name"],
-                        "date": event_date,
-                        "impact": meta["impact"],
-                        "description": meta["description"],
-                        "source": "FRED",
-                    })
-
+        events.sort(key=lambda e: e["date"])
         logger.info(f"FRED events: {len(events)} tracked releases for {from_date} to {to_date}")
         return events
 
+    except FredApiKeyMissing:
+        raise
     except Exception as e:
         logger.warning(f"FRED releases fetch failed: {e}")
         return []

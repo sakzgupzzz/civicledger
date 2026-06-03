@@ -10,9 +10,9 @@ All data comes from US government APIs — SEC EDGAR, FRED, Senate/House disclos
 |--------|--------|------|
 | **Fundamentals** | SEC EDGAR XBRL | Revenue, margins, ratios, growth for ~5,000 public companies |
 | **Earnings Calendar** | SEC EDGAR EFTS | Earnings announcement dates from 8-K Item 2.02 filings |
-| **Insider Trades** | SEC EDGAR Form 4 | Officer/director buys and sells |
-| **Institutional Holdings** | SEC EDGAR 13F | What hedge funds and institutions own |
-| **Congressional Trades** | Senate eFD + House Clerk | Stock trades by members of Congress |
+| **Insider Trades** | SEC EDGAR Form 4 | Officer/director buys and sells — with shares, price, and value parsed from each filing |
+| **Institutional Holdings** | SEC EDGAR 13F | What hedge funds and institutions own (ticker, shares, USD value per position) |
+| **Congressional Trades** | House Clerk | Stock trades by members of the US House — ticker, type, amount, and dates parsed from PTR PDFs |
 | **Economic Calendar** | FRED API | CPI, NFP, FOMC, GDP release dates |
 | **Material Events** | SEC EDGAR 8-K | Mergers, leadership changes, restructuring |
 
@@ -76,6 +76,14 @@ civicledger refresh all
 civicledger serve --port 8080
 ```
 
+Then open <http://localhost:8080/> for the **web dashboard** — browse insider
+trades, 13F holdings, congressional trades, earnings, 8-K events, and the
+economic calendar, with ticker search. Interactive API docs are at `/docs`.
+
+Responses are cached locally on disk (`~/.cache/civicledger`, configurable via
+`CIVICLEDGER_CACHE_DIR`) so repeated loads are instant. Clear it with
+`civicledger cache clear`, or disable with `CIVICLEDGER_CACHE_ENABLED=false`.
+
 Endpoints:
 - `GET /fundamentals` — All company fundamentals
 - `GET /fundamentals/{ticker}` — Single company
@@ -84,9 +92,14 @@ Endpoints:
 - `GET /insider-trades/{ticker}` — Detailed insider trades
 - `GET /institutions` — Top institutional investors
 - `GET /institutions/{manager}` — 13F holdings for a manager
-- `GET /congress` — Congressional stock trades
-- `GET /economic-events` — FRED economic calendar
+- `GET /congress?detailed=true` — House stock trades (`detailed=true` parses PTR PDFs for ticker/amount/type)
+- `GET /congress/house?detailed=true` — House trades only
+- `GET /economic-events` — FRED economic calendar (requires a free FRED API key)
 - `GET /material-events?item=5.02` — 8-K material events
+
+> **Congressional data is House-only.** The Senate eFD site
+> (efdsearch.senate.gov) blocks automated access, so `/congress/senate`
+> returns `501 Not Implemented`. Use `/congress` or `/congress/house`.
 
 ## Data Sources
 
@@ -94,8 +107,7 @@ All public domain:
 
 - **SEC EDGAR** — [sec.gov](https://www.sec.gov/search-filings/edgar-application-programming-interfaces) — No API key, 10 req/sec
 - **FRED** — [fred.stlouisfed.org](https://fred.stlouisfed.org/) — Free API key, attribution required
-- **Senate eFD** — [efdsearch.senate.gov](https://efdsearch.senate.gov/) — Public congressional disclosures
-- **House Clerk** — [disclosures-clerk.house.gov](https://disclosures-clerk.house.gov/) — Public congressional disclosures
+- **House Clerk** — [disclosures-clerk.house.gov](https://disclosures-clerk.house.gov/) — Public congressional disclosures (House only; Senate eFD blocks automated access)
 
 ### Attribution
 

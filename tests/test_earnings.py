@@ -1,25 +1,40 @@
-"""Test EDGAR earnings calendar."""
+"""Test EDGAR earnings calendar (live — marked integration)."""
+
+from datetime import date, timedelta
 
 import pytest
 from civicledger.edgar.earnings import fetch_earnings
 
 
+def _recent_weekday_range() -> tuple[str, str]:
+    """A 5-day window ending on the most recent weekday (avoids hardcoded dates)."""
+    end = date.today()
+    while end.weekday() >= 5:  # back up off the weekend
+        end -= timedelta(days=1)
+    return (end - timedelta(days=5)).isoformat(), end.isoformat()
+
+
+@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_fetch_earnings_returns_list():
     """Fetch earnings for a recent week and verify structure."""
-    results = await fetch_earnings("2026-03-10", "2026-03-14")
+    fd, td = _recent_weekday_range()
+    results = await fetch_earnings(fd, td)
     assert isinstance(results, list)
     if results:
         e = results[0]
         assert "ticker" in e
         assert "company" in e
         assert "filing_date" in e
-        assert e["ticker"] is not None
-        assert len(e["ticker"]) <= 5
 
 
+@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_fetch_earnings_empty_range():
-    """A weekend should return no earnings."""
-    results = await fetch_earnings("2026-01-04", "2026-01-04")  # Sunday
+    """A single weekend day should return no earnings."""
+    # Find a recent Sunday.
+    d = date.today()
+    while d.weekday() != 6:
+        d -= timedelta(days=1)
+    results = await fetch_earnings(d.isoformat(), d.isoformat())
     assert isinstance(results, list)

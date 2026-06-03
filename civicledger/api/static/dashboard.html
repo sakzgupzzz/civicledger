@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>CivicLedger — US Financial Intelligence</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Libre+Caslon+Display&family=Libre+Caslon+Text:ital,wght@0,400;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#0c0e11; --ink-2:#13161b; --ink-3:#171b21;
+    --line:#252b34; --line-soft:#1c2128;
+    --bone:#ece6d6; --bone-dim:#9b9686; --bone-faint:#6b6759;
+    --green:#5bb98b; --green-deep:#2f7d57;
+    --red:#d2654f; --amber:#d9a85c; --amber-deep:#a87c33;
+    --buy:var(--green); --sell:var(--red);
+    --shadow:0 24px 60px -28px rgba(0,0,0,.85);
+    --serif:'Libre Caslon Text',Georgia,serif;
+    --display:'Libre Caslon Display',Georgia,serif;
+    --mono:'IBM Plex Mono',ui-monospace,monospace;
+    --sans:'IBM Plex Sans',system-ui,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0;background:var(--ink);color:var(--bone);
+    font-family:var(--sans);font-size:15px;line-height:1.5;
+    -webkit-font-smoothing:antialiased;letter-spacing:.1px;
+    min-height:100vh;
+    background-image:
+      radial-gradient(1200px 600px at 80% -10%, rgba(217,168,92,.06), transparent 60%),
+      radial-gradient(900px 500px at -10% 110%, rgba(91,185,139,.05), transparent 55%);
+  }
+  /* engraving grain overlay */
+  body::before{
+    content:"";position:fixed;inset:0;pointer-events:none;z-index:0;opacity:.5;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.035'/%3E%3C/svg%3E");
+    mix-blend-mode:overlay;
+  }
+  .wrap{position:relative;z-index:1;max-width:1180px;margin:0 auto;padding:0 28px 80px}
+
+  /* ── Masthead ── */
+  header.masthead{
+    position:relative;padding:38px 0 26px;margin-bottom:2px;
+    border-bottom:1px solid var(--line);overflow:hidden;
+  }
+  /* guilloché banknote texture behind masthead */
+  header.masthead::after{
+    content:"";position:absolute;inset:-40% -10% auto -10%;height:240%;z-index:0;opacity:.10;
+    background:
+      repeating-radial-gradient(circle at 18% 40%, transparent 0 7px, var(--amber) 7px 8px),
+      repeating-radial-gradient(circle at 82% 60%, transparent 0 9px, var(--green) 9px 10px);
+    -webkit-mask-image:linear-gradient(180deg,#000,transparent 80%);mask-image:linear-gradient(180deg,#000,transparent 80%);
+  }
+  .masthead-row{position:relative;z-index:1;display:flex;align-items:flex-end;justify-content:space-between;gap:24px;flex-wrap:wrap}
+  .brand{display:flex;flex-direction:column;gap:7px}
+  .wordmark{
+    font-family:var(--display);font-size:clamp(34px,5.4vw,58px);line-height:.92;
+    letter-spacing:.5px;color:var(--bone);display:flex;align-items:baseline;gap:.12em;
+  }
+  .wordmark .dot{color:var(--amber)}
+  .wordmark .ledger{font-style:italic;color:var(--bone-dim)}
+  .kicker{
+    font-family:var(--mono);font-size:11px;letter-spacing:.32em;text-transform:uppercase;
+    color:var(--bone-faint);display:flex;align-items:center;gap:10px;
+  }
+  .kicker .seal{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 0 3px rgba(91,185,139,.18)}
+
+  /* ── Search ── */
+  .search{position:relative;z-index:1}
+  .search form{display:flex;align-items:stretch;border:1px solid var(--line);background:var(--ink-2);
+    border-radius:2px;overflow:hidden;min-width:280px;transition:border-color .25s, box-shadow .25s}
+  .search form:focus-within{border-color:var(--amber-deep);box-shadow:0 0 0 1px var(--amber-deep), 0 0 28px -8px rgba(217,168,92,.4)}
+  .search label{font-family:var(--mono);font-size:10px;letter-spacing:.25em;text-transform:uppercase;
+    color:var(--bone-faint);display:flex;align-items:center;padding:0 12px;border-right:1px solid var(--line);background:var(--ink-3)}
+  .search input{flex:1;background:transparent;border:0;color:var(--bone);font-family:var(--mono);
+    font-size:15px;letter-spacing:.18em;text-transform:uppercase;padding:11px 12px;outline:none;min-width:90px}
+  .search input::placeholder{color:var(--bone-faint);letter-spacing:.12em}
+  .search button{background:var(--ink-3);border:0;border-left:1px solid var(--line);color:var(--amber);
+    font-family:var(--mono);font-size:13px;padding:0 16px;cursor:pointer;transition:background .2s,color .2s}
+  .search button:hover{background:var(--amber);color:var(--ink)}
+
+  /* ── Fundamentals strip ── */
+  .fund-strip{display:none;gap:0;margin-top:18px;border:1px solid var(--line);background:var(--ink-2);
+    border-radius:2px;overflow:hidden;position:relative;z-index:1}
+  .fund-strip.show{display:flex;flex-wrap:wrap;animation:fade-up .5s both}
+  .fund-cell{flex:1;min-width:120px;padding:13px 18px;border-right:1px solid var(--line-soft)}
+  .fund-cell:last-child{border-right:0}
+  .fund-cell .l{font-family:var(--mono);font-size:9.5px;letter-spacing:.22em;text-transform:uppercase;color:var(--bone-faint)}
+  .fund-cell .v{font-family:var(--mono);font-size:19px;color:var(--bone);margin-top:5px;font-variant-numeric:tabular-nums}
+  .fund-cell .v.pos{color:var(--green)} .fund-cell .v.neg{color:var(--red)}
+  .fund-name{flex-basis:100%;padding:11px 18px 8px;font-family:var(--serif);font-size:17px;color:var(--bone);
+    border-bottom:1px solid var(--line-soft);background:var(--ink-3)}
+
+  /* ── Tabs ── */
+  nav.tabs{position:sticky;top:0;z-index:5;display:flex;gap:2px;margin:26px 0 0;
+    border-bottom:1px solid var(--line);background:linear-gradient(180deg,var(--ink) 70%,transparent);
+    overflow-x:auto;scrollbar-width:none}
+  nav.tabs::-webkit-scrollbar{display:none}
+  .tab{position:relative;background:none;border:0;color:var(--bone-dim);font-family:var(--mono);
+    font-size:12px;letter-spacing:.16em;text-transform:uppercase;padding:15px 18px;cursor:pointer;white-space:nowrap;
+    transition:color .2s}
+  .tab:hover{color:var(--bone)}
+  .tab.active{color:var(--bone)}
+  .tab.active::after{content:"";position:absolute;left:14px;right:14px;bottom:-1px;height:2px;
+    background:var(--amber);box-shadow:0 0 14px -2px var(--amber)}
+  .tab .n{color:var(--bone-faint);font-size:10px;margin-left:7px;vertical-align:super}
+
+  /* ── Panel ── */
+  .panel{display:none;padding-top:8px}
+  .panel.active{display:block;animation:fade-up .45s both}
+  .panel-head{display:flex;align-items:baseline;justify-content:space-between;gap:16px;flex-wrap:wrap;
+    padding:20px 2px 12px}
+  .panel-head h2{font-family:var(--serif);font-weight:700;font-size:22px;margin:0;letter-spacing:.2px}
+  .panel-head .meta{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--bone-faint)}
+  .panel-head .controls{display:flex;gap:8px;align-items:center}
+  .toggle{font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--bone-dim);
+    border:1px solid var(--line);background:var(--ink-2);padding:6px 11px;border-radius:2px;cursor:pointer;transition:.2s}
+  .toggle:hover{border-color:var(--amber-deep);color:var(--bone)}
+  .toggle.on{color:var(--ink);background:var(--amber);border-color:var(--amber)}
+  .hint{font-family:var(--sans);font-size:12.5px;color:var(--bone-faint);padding:0 2px 14px;max-width:60ch}
+
+  /* ── Table ── */
+  .ledger{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:13px}
+  .ledger th{font-size:9.5px;letter-spacing:.2em;text-transform:uppercase;color:var(--bone-faint);
+    text-align:left;font-weight:500;padding:10px 14px;border-bottom:1px solid var(--line);position:sticky;top:48px;background:var(--ink)}
+  .ledger td{padding:11px 14px;border-bottom:1px solid var(--line-soft);color:var(--bone-dim);vertical-align:top}
+  .ledger tr{transition:background .15s}
+  .ledger tbody tr:hover{background:var(--ink-2)}
+  .ledger .num{text-align:right;font-variant-numeric:tabular-nums;color:var(--bone)}
+  .ledger .tk{color:var(--bone);font-weight:600;letter-spacing:.06em}
+  .ledger .who{font-family:var(--sans);color:var(--bone)}
+  .ledger .sub{font-family:var(--sans);font-size:11.5px;color:var(--bone-faint)}
+  .ledger tbody tr{opacity:0;animation:row-in .4s forwards}
+  @keyframes row-in{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+
+  .badge{display:inline-block;font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;
+    padding:3px 8px;border-radius:2px;border:1px solid;font-weight:500}
+  .badge.buy{color:var(--green);border-color:rgba(91,185,139,.4);background:rgba(91,185,139,.08)}
+  .badge.sell{color:var(--red);border-color:rgba(210,101,79,.4);background:rgba(210,101,79,.08)}
+  .badge.neutral{color:var(--bone-dim);border-color:var(--line)}
+  .badge.hi{color:var(--amber);border-color:rgba(217,168,92,.45);background:rgba(217,168,92,.08)}
+  .badge.mid{color:var(--bone-dim);border-color:var(--line)}
+  .badge.lo{color:var(--bone-faint);border-color:var(--line-soft)}
+
+  .bar{display:inline-block;height:6px;border-radius:1px;background:linear-gradient(90deg,var(--green-deep),var(--green));vertical-align:middle}
+
+  /* states */
+  .state{padding:50px 14px;text-align:center;font-family:var(--mono);font-size:12.5px;letter-spacing:.08em;color:var(--bone-faint)}
+  .state .big{font-family:var(--serif);font-size:18px;color:var(--bone-dim);margin-bottom:8px;letter-spacing:0}
+  .spinner{display:inline-block;width:13px;height:13px;border:2px solid var(--line);border-top-color:var(--amber);
+    border-radius:50%;animation:spin .7s linear infinite;vertical-align:-2px;margin-right:8px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .skel{height:13px;border-radius:2px;background:linear-gradient(90deg,var(--ink-2),var(--ink-3),var(--ink-2));
+    background-size:200% 100%;animation:shimmer 1.3s infinite}
+  @keyframes shimmer{to{background-position:-200% 0}}
+
+  footer{margin-top:54px;padding-top:22px;border-top:1px solid var(--line);
+    font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;color:var(--bone-faint);line-height:1.9}
+  footer a{color:var(--bone-dim);text-decoration:none;border-bottom:1px solid var(--line)}
+  footer a:hover{color:var(--amber)}
+  footer .src{display:flex;gap:18px;flex-wrap:wrap;margin-bottom:10px}
+
+  @keyframes fade-up{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+
+  /* ── Splash / loading screen ── */
+  #splash{position:fixed;inset:0;z-index:50;background:var(--ink);display:flex;
+    flex-direction:column;align-items:center;justify-content:center;gap:24px;
+    transition:opacity .6s ease, visibility .6s;
+    background-image:radial-gradient(800px 400px at 50% 40%, rgba(217,168,92,.05), transparent 70%);}
+  #splash.gone{opacity:0;visibility:hidden}
+  #splash .seal-ring{width:62px;height:62px;border-radius:50%;position:relative;
+    border:1px solid var(--line);display:flex;align-items:center;justify-content:center}
+  #splash .seal-ring::before{content:"";position:absolute;inset:-1px;border-radius:50%;
+    border:2px solid transparent;border-top-color:var(--amber);animation:spin 1s linear infinite}
+  #splash .seal-ring span{font-family:var(--display);font-size:30px;color:var(--bone)}
+  #splash .smark{font-family:var(--display);font-size:30px;letter-spacing:.5px;color:var(--bone)}
+  #splash .smark b{color:var(--amber);font-weight:400}
+  #splash .sload{font-family:var(--mono);font-size:10.5px;letter-spacing:.34em;text-transform:uppercase;color:var(--bone-faint)}
+
+  /* cached indicator + refresh */
+  .stamp{font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--bone-faint);
+    display:inline-flex;align-items:center;gap:7px}
+  .stamp .dot-c{width:5px;height:5px;border-radius:50%;background:var(--green)}
+  .stamp .dot-c.live{background:var(--amber)}
+  .refresh{font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--bone-dim);
+    border:1px solid var(--line);background:var(--ink-2);padding:6px 11px;border-radius:2px;cursor:pointer;transition:.2s}
+  .refresh:hover{border-color:var(--amber-deep);color:var(--bone)}
+  .refresh:disabled{opacity:.5;cursor:default}
+
+  /* FRED setup card */
+  .setup{border:1px solid var(--line);background:var(--ink-2);border-radius:2px;padding:22px 24px;margin:8px 2px;max-width:640px;animation:fade-up .4s both}
+  .setup h3{font-family:var(--serif);font-size:18px;margin:0 0 6px}
+  .setup p{font-family:var(--sans);font-size:13px;color:var(--bone-dim);margin:0 0 16px;line-height:1.6}
+  .setup ol{margin:0;padding-left:20px;counter-reset:step;list-style:none}
+  .setup li{position:relative;font-family:var(--sans);font-size:13.5px;color:var(--bone-dim);margin:0 0 13px;padding-left:14px;line-height:1.55}
+  .setup li::before{counter-increment:step;content:counter(step);position:absolute;left:-20px;top:-1px;
+    width:22px;height:22px;border-radius:50%;border:1px solid var(--amber-deep);color:var(--amber);
+    font-family:var(--mono);font-size:11px;display:flex;align-items:center;justify-content:center}
+  .setup a{color:var(--amber);text-decoration:none;border-bottom:1px solid var(--amber-deep)}
+  .setup a:hover{color:var(--bone)}
+  .setup code{font-family:var(--mono);font-size:12px;background:var(--ink-3);border:1px solid var(--line);
+    padding:2px 7px;border-radius:2px;color:var(--bone)}
+
+  @media(max-width:680px){
+    .wrap{padding:0 16px 60px}
+    .panel-head{padding:16px 0 10px}
+    .ledger .sub{display:none}
+  }
+</style>
+</head>
+<body>
+<div id="splash">
+  <div class="seal-ring"><span>C</span></div>
+  <div class="smark">Civic<b>·</b>Ledger</div>
+  <div class="sload">Loading public records…</div>
+</div>
+<div class="wrap">
+  <header class="masthead">
+    <div class="masthead-row">
+      <div class="brand">
+        <div class="wordmark">Civic<span class="dot">·</span><span class="ledger">Ledger</span></div>
+        <div class="kicker"><span class="seal"></span>US Financial Intelligence · Public Domain Sources</div>
+      </div>
+      <div class="search">
+        <form id="searchForm">
+          <label for="tk">Ticker</label>
+          <input id="tk" name="tk" placeholder="AAPL" autocomplete="off" spellcheck="false" maxlength="6" />
+          <button type="submit">↵</button>
+        </form>
+      </div>
+    </div>
+    <div class="fund-strip" id="fundStrip"></div>
+  </header>
+
+  <nav class="tabs" id="tabs">
+    <button class="tab active" data-tab="insider">Insider Trades</button>
+    <button class="tab" data-tab="institutions">13F Holdings</button>
+    <button class="tab" data-tab="congress">Congress</button>
+    <button class="tab" data-tab="earnings">Earnings</button>
+    <button class="tab" data-tab="material">8-K Events</button>
+    <button class="tab" data-tab="economic">Economic</button>
+  </nav>
+
+  <section class="panel active" id="p-insider"></section>
+  <section class="panel" id="p-institutions"></section>
+  <section class="panel" id="p-congress"></section>
+  <section class="panel" id="p-earnings"></section>
+  <section class="panel" id="p-material"></section>
+  <section class="panel" id="p-economic"></section>
+
+  <footer>
+    <div class="src">
+      <span>SEC EDGAR</span><span>FRED</span><span>House Clerk</span>
+      <a href="/docs">API ↗</a>
+    </div>
+    This product uses the FRED® API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.
+    All data from US government public-domain sources. Congressional data is House-only.
+  </footer>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const el = (t, c, h) => { const e=document.createElement(t); if(c)e.className=c; if(h!=null)e.innerHTML=h; return e; };
+
+// ── formatters ──
+const fmtMoney = v => {
+  if (v==null||v==='') return '—'; const n=+v; if(isNaN(n)) return v;
+  const a=Math.abs(n), s=n<0?'-':'';
+  if(a>=1e9) return s+'$'+(a/1e9).toFixed(2)+'B';
+  if(a>=1e6) return s+'$'+(a/1e6).toFixed(2)+'M';
+  if(a>=1e3) return s+'$'+(a/1e3).toFixed(1)+'K';
+  return s+'$'+a.toLocaleString();
+};
+const fmtNum = v => v==null?'—':(+v).toLocaleString();
+const fmtPct = v => v==null?'—':(v*100).toFixed(1)+'%';
+const esc = s => (s==null?'':String(s)).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const today = () => new Date().toISOString().slice(0,10);
+const ago = d => { const t=new Date(); t.setDate(t.getDate()-d); return t.toISOString().slice(0,10); };
+
+async function api(path){
+  const r = await fetch(path);
+  let body; try{ body = await r.json(); }catch{ body = null; }
+  if(!r.ok){ const e = new Error((body&&body.detail)||('HTTP '+r.status)); e.status=r.status; throw e; }
+  return body;
+}
+
+// ── client-side cache (stale-while-revalidate via localStorage) ──
+const LS='cl:';
+function lsGet(p){ try{ const r=localStorage.getItem(LS+p); return r?JSON.parse(r):null; }catch{ return null; } }
+function lsSet(p,d){ try{ localStorage.setItem(LS+p, JSON.stringify({ts:Date.now(),data:d})); }catch{} }
+// returns {data, ts, fromCache, stale}. Serves fresh cache instantly; on a
+// miss fetches + stores; on network error falls back to stale cache if present.
+async function getData(path, ttlMs, force){
+  const c = lsGet(path);
+  if(!force && c && (Date.now()-c.ts) < ttlMs){ return {data:c.data, ts:c.ts, fromCache:true}; }
+  try{
+    const data = await api(path); lsSet(path,data);
+    return {data, ts:Date.now(), fromCache:false};
+  }catch(e){
+    if(c) return {data:c.data, ts:c.ts, fromCache:true, stale:true};
+    throw e;
+  }
+}
+const TTL = {fund:6*3600e3, insider:30*60e3, inst:6*3600e3, congress:60*60e3, earn:30*60e3, mat:60*60e3, econ:6*3600e3};
+function agoStr(ts){
+  const s=Math.round((Date.now()-ts)/1000);
+  if(s<60) return 'just now'; if(s<3600) return Math.floor(s/60)+'m ago';
+  if(s<86400) return Math.floor(s/3600)+'h ago'; return Math.floor(s/86400)+'d ago';
+}
+
+// ── splash ──
+function hideSplash(){ const s=$('#splash'); if(!s) return; s.classList.add('gone'); setTimeout(()=>s.remove(),700); }
+if(document.fonts&&document.fonts.ready){ document.fonts.ready.then(()=>setTimeout(hideSplash,350)); }
+setTimeout(hideSplash, 2200); // safety
+
+function loading(panel, label){
+  panel.innerHTML='';
+  const rows = Array.from({length:6}).map(()=>`<tr><td colspan="9"><div class="skel" style="width:${50+Math.random()*45}%"></div></td></tr>`).join('');
+  panel.appendChild(el('div','state',`<span class="spinner"></span>Querying ${label}…`));
+}
+function emptyState(panel, big, sub){
+  panel.innerHTML=''; panel.appendChild(el('div','state',`<div class="big">${big}</div>${sub||''}`));
+}
+function errState(panel, msg){
+  panel.innerHTML=''; panel.appendChild(el('div','state',`<div class="big">Unavailable</div>${esc(msg)}`));
+}
+
+function head(panel, title, meta, controls){
+  const h = el('div','panel-head');
+  h.appendChild(el('h2',null,title));
+  const right = el('div','controls');
+  if(controls) right.appendChild(controls);
+  if(meta) right.appendChild(el('span','meta',meta));
+  h.appendChild(right);
+  panel.appendChild(h);
+  return h;
+}
+// attach a "cached / live" stamp + refresh button to a panel head.
+function stampHead(h, info, reloadFn){
+  if(!h) return;
+  const right = h.querySelector('.controls'); if(!right) return;
+  const s = el('span','stamp');
+  s.innerHTML = `<span class="dot-c ${info.fromCache?'':'live'}"></span>${info.fromCache?(info.stale?'cached (offline)':'cached '+agoStr(info.ts)):'updated '+agoStr(info.ts)}`;
+  right.insertBefore(s, right.firstChild);
+  if(reloadFn){
+    const b = el('button','refresh','↻ Refresh');
+    b.onclick = ()=>{ b.disabled=true; b.textContent='↻ Refreshing…'; reloadFn(); };
+    right.insertBefore(b, right.firstChild);
+  }
+}
+function table(panel, cols){
+  const t = el('table','ledger');
+  t.innerHTML = '<thead><tr>'+cols.map(c=>`<th${c.num?' style="text-align:right"':''}>${c.h}</th>`).join('')+'</tr></thead>';
+  const tb = el('tbody'); t.appendChild(tb); panel.appendChild(t);
+  return tb;
+}
+function row(tb, cells, i){
+  const tr = el('tr'); tr.style.animationDelay=(Math.min(i,18)*22)+'ms';
+  tr.innerHTML = cells.join(''); tb.appendChild(tr);
+}
+const txnBadge = t => {
+  const s=(t||'').toLowerCase();
+  if(/(purchase|buy|^p$|exchange)/.test(s)) return `<span class="badge buy">${esc(t||'buy')}</span>`;
+  if(/(sale|sell|^s$)/.test(s)) return `<span class="badge sell">${esc(t||'sell')}</span>`;
+  return `<span class="badge neutral">${esc(t||'—')}</span>`;
+};
+
+// ── tab renderers (lazy) ──
+const STATE = {ticker:''};
+const loaders = {
+  async insider(panel, opts={}){
+    const tk = STATE.ticker;
+    if(!tk){ emptyState(panel,'Search a ticker','Insider Form 4 detail is per-company. Enter a ticker above to pull officer & director trades — shares, price, and value parsed from each filing.'); return; }
+    loading(panel,`Form 4 filings for ${tk}`);
+    try{
+      const r = await getData(`/insider-trades/${tk}?limit=40`, TTL.insider, opts.force);
+      const d = r.data; panel.innerHTML='';
+      const h = head(panel, `${tk} · Insider Trades`, `${d.count} transactions · SEC Form 4`);
+      stampHead(h, r, ()=>loaders.insider(panel,{force:true}));
+      if(!d.count){ emptyState(panel,'No recent Form 4 filings',`${tk} has no parsed insider transactions.`); return; }
+      const tb = table(panel,[{h:'Date'},{h:'Insider'},{h:'Type'},{h:'Shares',num:1},{h:'Price',num:1},{h:'Value',num:1},{h:'Owned After',num:1}]);
+      d.trades.forEach((t,i)=>row(tb,[
+        `<td>${esc(t.transaction_date||t.filing_date)}</td>`,
+        `<td class="who">${esc(t.insider_name||'—')}<div class="sub">${esc(t.insider_title||'')}</div></td>`,
+        `<td>${txnBadge(t.transaction_type)} <span class="sub">${esc(t.transaction_code||'')}</span></td>`,
+        `<td class="num">${fmtNum(t.shares)}</td>`,
+        `<td class="num">${t.price_per_share?'$'+(+t.price_per_share).toFixed(2):'—'}</td>`,
+        `<td class="num">${fmtMoney(t.total_value)}</td>`,
+        `<td class="num">${fmtNum(t.shares_owned_after)}</td>`,
+      ],i));
+    }catch(e){ errState(panel,e.message); }
+  },
+
+  async institutions(panel, opts={}){
+    if(opts.manager){
+      loading(panel,opts.manager);
+      try{
+        const r = await getData(`/institutions/${encodeURIComponent(opts.manager)}?limit=40`, TTL.inst, opts.force);
+        const d = r.data; panel.innerHTML='';
+        const back = el('button','toggle','‹ Top funds'); back.onclick=()=>loaders.institutions(panel);
+        const h = head(panel, esc(d.manager_name||opts.manager), `${fmtMoney((d.total_value_millions||0)*1e6)} · ${d.holdings_count} positions · ${esc(d.period||'')}`, back);
+        stampHead(h, r, ()=>loaders.institutions(panel,{manager:opts.manager,force:true}));
+        const tb = table(panel,[{h:'Ticker'},{h:'Issuer'},{h:'Shares',num:1},{h:'Value',num:1},{h:'Weight',num:1}]);
+        const top = d.holdings[0]?.value_usd||1;
+        d.holdings.forEach((h,i)=>row(tb,[
+          `<td class="tk">${esc(h.ticker||'—')}</td>`,
+          `<td class="who">${esc(h.company||'')}</td>`,
+          `<td class="num">${fmtNum(h.shares)}</td>`,
+          `<td class="num">${fmtMoney(h.value_usd)}</td>`,
+          `<td class="num"><span class="bar" style="width:${Math.max(6,(h.value_usd/top)*60)}px"></span></td>`,
+        ],i));
+      }catch(e){ errState(panel,e.message); }
+      return;
+    }
+    loading(panel,'top institutions (13F)');
+    try{
+      const r = await getData('/institutions', TTL.inst, opts.force);
+      const d = r.data; panel.innerHTML='';
+      const h = head(panel,'13F Institutional Holdings', `${d.count} major funds · SEC 13F-HR`);
+      stampHead(h, r, ()=>loaders.institutions(panel,{force:true}));
+      panel.appendChild(el('div','hint','Quarterly equity positions of $100M+ managers. Select a fund to see full holdings with tickers and USD value.'));
+      const tb = table(panel,[{h:'Manager'},{h:'Portfolio',num:1},{h:'Positions',num:1},{h:'Top Holdings'},{h:'Period'}]);
+      d.institutions.forEach((m,i)=>{
+        const topH=(m.top_holdings||[]).map(x=>x.ticker).filter(Boolean).slice(0,5).join(' · ');
+        const tr=el('tr'); tr.style.animationDelay=(i*24)+'ms'; tr.style.cursor='pointer';
+        tr.innerHTML=[
+          `<td class="who">${esc(m.manager_name)}</td>`,
+          `<td class="num">${fmtMoney((m.total_value_millions||0)*1e6)}</td>`,
+          `<td class="num">${fmtNum(m.holdings_count)}</td>`,
+          `<td class="sub" style="font-family:var(--mono)">${esc(topH||'—')}</td>`,
+          `<td>${esc(m.period||'—')}</td>`,
+        ].join('');
+        tr.onclick=()=>loaders.institutions(panel,{manager:m.manager_cik||m.manager_name});
+        $('#p-institutions tbody').appendChild(tr);
+      });
+    }catch(e){ errState(panel,e.message); }
+  },
+
+  async congress(panel, opts={}){
+    const detailed = opts.detailed ?? true;
+    loading(panel, detailed?'House PTR detail (parsing PDFs)':'House disclosures');
+    try{
+      const r = await getData(`/congress/house?detailed=${detailed}&limit=60`, TTL.congress, opts.force);
+      const d = r.data; panel.innerHTML='';
+      const tg = el('button','toggle'+(detailed?' on':''), detailed?'Transaction detail · ON':'Transaction detail · OFF');
+      tg.onclick=()=>loaders.congress(panel,{detailed:!detailed});
+      const h = head(panel,'Congressional Trades', `${d.count} ${detailed?'transactions':'filings'} · ${d.year} · House`, tg);
+      stampHead(h, r, ()=>loaders.congress(panel,{detailed,force:true}));
+      panel.appendChild(el('div','hint', detailed
+        ? 'Ticker, type, and amount parsed from PTR PDFs (STOCK Act disclosures). Senate is unavailable — eFD blocks automation.'
+        : 'Filing-level disclosures. Toggle detail to parse PTR PDFs for ticker and amount (slower).'));
+      if(!d.count){ emptyState(panel,'No disclosures',''); return; }
+      if(detailed){
+        const tb = table(panel,[{h:'Date'},{h:'Member'},{h:'Ticker'},{h:'Type'},{h:'Amount'},{h:'Asset'}]);
+        d.trades.forEach((t,i)=>row(tb,[
+          `<td>${esc(t.transaction_date||t.disclosure_date||'—')}</td>`,
+          `<td class="who">${esc(t.politician||'')}<div class="sub">${esc(t.state||'')}</div></td>`,
+          `<td class="tk">${esc(t.ticker||'—')}</td>`,
+          `<td>${txnBadge(t.transaction_type)}</td>`,
+          `<td>${esc(t.amount_range||'—')}</td>`,
+          `<td class="sub" style="max-width:240px">${esc(t.asset_description||'')}</td>`,
+        ],i));
+      } else {
+        const tb = table(panel,[{h:'Disclosed'},{h:'Member'},{h:'State'},{h:'Filing'}]);
+        d.trades.forEach((t,i)=>row(tb,[
+          `<td>${esc(t.disclosure_date||'—')}</td>`,
+          `<td class="who">${esc(t.politician||'')}</td>`,
+          `<td>${esc(t.state||'—')}</td>`,
+          `<td>${t.source_url?`<a href="${esc(t.source_url)}" target="_blank" style="color:var(--amber);text-decoration:none">PTR ↗</a>`:'—'}</td>`,
+        ],i));
+      }
+    }catch(e){ errState(panel,e.message); }
+  },
+
+  async earnings(panel, opts={}){
+    loading(panel,'8-K earnings filings');
+    try{
+      const r = await getData(`/earnings?from_date=${ago(14)}&to_date=${today()}`, TTL.earn, opts.force);
+      const d = r.data; panel.innerHTML='';
+      let rows = d.earnings || [];
+      if(STATE.ticker) rows = rows.filter(e=>(e.ticker||'').toUpperCase()===STATE.ticker);
+      const h = head(panel,'Earnings Calendar', `${rows.length} announcements${STATE.ticker?' · '+STATE.ticker:''} · ${d.from_date} → ${d.to_date}`);
+      stampHead(h, r, ()=>loaders.earnings(panel,{force:true}));
+      panel.appendChild(el('div','hint','Companies that filed 8-K Item 2.02 (Results of Operations) in the last two weeks.'));
+      if(!rows.length){ emptyState(panel, STATE.ticker?`No earnings for ${STATE.ticker}`:'No earnings filings', STATE.ticker?'No 8-K Item 2.02 filing for this ticker in the window. Clear the ticker to see all companies.':'No 8-K Item 2.02 filings in this window.'); return; }
+      const tb = table(panel,[{h:'Filed'},{h:'Ticker'},{h:'Company'},{h:'CIK'}]);
+      rows.forEach((e,i)=>row(tb,[
+        `<td>${esc(e.filing_date)}</td>`,
+        `<td class="tk">${esc(e.ticker||'—')}</td>`,
+        `<td class="who">${esc(e.company||'')}</td>`,
+        `<td class="sub">${esc(e.cik||'')}</td>`,
+      ],i));
+    }catch(e){ errState(panel,e.message); }
+  },
+
+  async material(panel, opts={}){
+    loading(panel,'8-K material events');
+    try{
+      const r = await getData(`/material-events?from_date=${ago(10)}&to_date=${today()}`, TTL.mat, opts.force);
+      const d = r.data; panel.innerHTML='';
+      let rows = d.events || []; if(STATE.ticker) rows = rows.filter(e=>(e.ticker||'').toUpperCase()===STATE.ticker);
+      const h = head(panel,'Material Events', `${rows.length} filings${STATE.ticker?' · '+STATE.ticker:''} · 8-K · ${d.from_date} → ${d.to_date}`);
+      stampHead(h, r, ()=>loaders.material(panel,{force:true}));
+      panel.appendChild(el('div','hint','Significant corporate events: mergers, officer changes, agreements, restructuring — from 8-K filings.'));
+      if(!rows.length){ emptyState(panel, STATE.ticker?`No 8-K events for ${STATE.ticker}`:'No material events', STATE.ticker?'Clear the ticker to see all filers.':''); return; }
+      const tb = table(panel,[{h:'Filed'},{h:'Ticker'},{h:'Company'},{h:'Items'}]);
+      rows.forEach((e,i)=>{
+        const labels=(e.item_labels||e.items||[]); const lab=Array.isArray(labels)?labels.join(', '):labels;
+        row(tb,[
+          `<td>${esc(e.filing_date)}</td>`,
+          `<td class="tk">${esc(e.ticker||'—')}</td>`,
+          `<td class="who">${esc(e.company||'')}</td>`,
+          `<td class="sub">${esc(lab||'—')}</td>`,
+        ],i);
+      });
+    }catch(e){ errState(panel,e.message); }
+  },
+
+  async economic(panel, opts={}){
+    loading(panel,'FRED release calendar');
+    try{
+      const r = await getData(`/economic-events?from_date=${ago(7)}&to_date=${ago(-21)}`, TTL.econ, opts.force);
+      const d = r.data; panel.innerHTML='';
+      const h = head(panel,'Economic Calendar', `${d.count} releases · FRED`);
+      stampHead(h, r, ()=>loaders.economic(panel,{force:true}));
+      panel.appendChild(el('div','hint','Upcoming US macro releases — CPI, payrolls, GDP, FOMC and more, with impact level.'));
+      if(!d.count){ emptyState(panel,'No releases scheduled',''); return; }
+      const tb = table(panel,[{h:'Date'},{h:'Release'},{h:'Impact'},{h:'Description'}]);
+      d.events.forEach((e,i)=>{
+        const imp=(e.impact||'').toLowerCase();
+        const cls=imp==='high'?'hi':imp==='medium'?'mid':'lo';
+        row(tb,[
+          `<td>${esc(e.date)}</td>`,
+          `<td class="who">${esc(e.name)}</td>`,
+          `<td><span class="badge ${cls}">${esc(e.impact||'—')}</span></td>`,
+          `<td class="sub" style="max-width:340px">${esc(e.description||'')}</td>`,
+        ],i);
+      });
+    }catch(e){
+      panel.innerHTML='';
+      head(panel,'Economic Calendar','FRED');
+      if(e.status===503) panel.appendChild(fredSetupCard());
+      else errState(panel,e.message);
+    }
+  },
+};
+
+// FRED API-key setup instructions (shown when the key isn't configured).
+function fredSetupCard(){
+  const c = el('div','setup');
+  c.innerHTML = `
+    <h3>Connect a free FRED API key</h3>
+    <p>The economic calendar is powered by the Federal Reserve's FRED API. It's free — a key takes about a minute to set up.</p>
+    <ol>
+      <li>Create a free account at <a href="https://fredaccount.stlouisfed.org/login/secure/" target="_blank" rel="noopener">fredaccount.stlouisfed.org</a>.</li>
+      <li>Request an API key at <a href="https://fredaccount.stlouisfed.org/apikeys" target="_blank" rel="noopener">fredaccount.stlouisfed.org/apikeys</a> — it's issued instantly.</li>
+      <li>Set it as an environment variable (or add it to a <code>.env</code> file):<br><code>CIVICLEDGER_FRED_API_KEY=your_key_here</code></li>
+      <li>Restart the server: <code>civicledger serve</code>, then reload this page.</li>
+    </ol>`;
+  return c;
+}
+
+// ── tab machinery ──
+const loaded = new Set();
+function activate(name){
+  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.dataset.tab===name));
+  document.querySelectorAll('.panel').forEach(p=>p.classList.toggle('active',p.id==='p-'+name));
+  const panel = $('#p-'+name);
+  if(!loaded.has(name)){ loaded.add(name); loaders[name](panel); }
+}
+$('#tabs').addEventListener('click',e=>{ const b=e.target.closest('.tab'); if(b) activate(b.dataset.tab); });
+
+// ── ticker search ──
+async function loadFundamentals(tk, force){
+  const strip = $('#fundStrip');
+  strip.className='fund-strip show'; strip.innerHTML=`<div class="fund-name"><span class="spinner"></span>${tk}</div>`;
+  try{
+    const r = await getData(`/fundamentals/${tk}`, TTL.fund, force);
+    const d = r.data;
+    const cells=[
+      ['Revenue',fmtMoney(d.revenue)], ['Net Income',fmtMoney(d.net_income),d.net_income],
+      ['Profit Margin',fmtPct(d.profit_margin),d.profit_margin],
+      ['Gross Margin',fmtPct(d.gross_margin)], ['ROE',fmtPct(d.return_on_equity)],
+      ['EPS',d.eps!=null?'$'+(+d.eps).toFixed(2):'—',d.eps],
+      ['Rev Growth',fmtPct(d.revenue_growth),d.revenue_growth],
+    ];
+    strip.innerHTML=`<div class="fund-name">${esc(d.company||tk)} · <span style="color:var(--bone-faint)">${esc(d.period||'')}${r.fromCache?' · cached':''}</span></div>`+
+      cells.map(([l,v,sign])=>{
+        const c = sign==null?'':(+sign>0?'pos':(+sign<0?'neg':''));
+        return `<div class="fund-cell"><div class="l">${l}</div><div class="v ${c}">${v}</div></div>`;
+      }).join('');
+  }catch(e){
+    strip.innerHTML=`<div class="fund-name">${tk} · <span style="color:var(--bone-faint)">no SEC fundamentals (${esc(e.message)})</span></div>`;
+  }
+}
+$('#searchForm').addEventListener('submit',e=>{
+  e.preventDefault();
+  const tk=$('#tk').value.trim().toUpperCase();
+  if(!/^[A-Z]{1,5}([.\-][A-Z]{1,4})?$/.test(tk)){ $('#tk').focus(); return; }
+  STATE.ticker=tk;
+  loadFundamentals(tk);
+  // refresh ticker-sensitive tabs
+  ['insider','earnings','material'].forEach(n=>loaded.delete(n));
+  const active=document.querySelector('.tab.active').dataset.tab;
+  if(['insider','earnings','material'].includes(active)){ loaded.add(active); loaders[active]($('#p-'+active)); }
+  else activate('insider');
+});
+
+// boot
+activate('insider');
+</script>
+</body>
+</html>

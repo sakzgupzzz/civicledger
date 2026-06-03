@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     # Rate limiting
     edgar_rate_limit: float = 0.12  # seconds between requests (≈8/sec, under 10/sec limit)
 
+    # Local disk cache (so repeated dashboard/API loads are instant)
+    cache_dir: str = "~/.cache/civicledger"
+    cache_enabled: bool = True
+
     # Logging
     log_level: str = "INFO"
 

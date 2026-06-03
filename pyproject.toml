@@ -31,13 +31,18 @@ dependencies = [
     "lxml>=5.0",
     "edgartools>=5.0",
     "pandas>=2.0",
+    "pdfplumber>=0.11",
     "mcp[cli]>=1.0",
     "boto3>=1.35",
+    # Pin starlette into FastAPI's supported range. mcp depends on starlette
+    # with an open-ended floor (>=0.27), so without this the resolver can pull
+    # starlette 1.0.0, which breaks FastAPI (needs <0.39) at app construction.
+    "starlette>=0.37.2,<0.39",
 ]
 
 [project.optional-dependencies]
 server = [
-    "fastapi>=0.110",
+    "fastapi>=0.115,<0.116",
     "uvicorn[standard]>=0.30",
     "redis>=5.0",
 ]
@@ -55,6 +60,9 @@ Homepage = "https://github.com/sakzgupzzz/civicledger"
 Repository = "https://github.com/sakzgupzzz/civicledger"
 Issues = "https://github.com/sakzgupzzz/civicledger/issues"
 
+[tool.hatch.build.targets.wheel]
+artifacts = ["civicledger/api/static/*.html"]
+
 [tool.ruff]
 target-version = "py311"
 line-length = 120
@@ -62,3 +70,6 @@ line-length = 120
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "integration: tests that hit live network APIs (SEC EDGAR, FRED, House clerk)",
+]

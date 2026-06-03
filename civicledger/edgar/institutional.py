@@ -9,9 +9,19 @@ Source: https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&type=13F
 Public domain. No API key required.
 """
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from loguru import logger
+
+
+def _to_number(v: Any) -> Optional[float]:
+    """Coerce 13F values/shares (which may be strings with commas) to a number."""
+    if v is None or v == "":
+        return None
+    try:
+        return float(str(v).replace(",", ""))
+    except (TypeError, ValueError):
+        return None
 
 
 # Well-known institutional investors for prefetching
@@ -77,47 +87,63 @@ async def fetch_holdings(
         if not obj:
             return {"error": "Could not parse 13F filing"}
 
-        # Extract holdings
+        # Extract holdings from the 13F information table. edgartools resolves
+        # CUSIP -> Ticker for us, so prefer the infotable DataFrame.
         holdings: List[Dict[str, Any]] = []
         total_value = 0
 
-        if hasattr(obj, "infotable") and obj.infotable is not None:
-            df = obj.infotable
+        df = getattr(obj, "infotable", None)
+        if df is not None and not df.empty:
+            # Column names from edgartools (capitalized): Issuer, Cusip, Value,
+            # SharesPrnAmount, Ticker, PutCall, Class.
+            cols = set(df.columns)
+
+            def _col(row, *names):
+                for n in names:
+                    if n in cols:
+                        v = row.get(n)
+                        if v is not None and str(v) != "" and str(v).lower() != "nan":
+                            return v
+                return None
+
             for _, row in df.iterrows():
-                cusip = str(row.get("cusip", "")) if "cusip" in df.columns else None
-                shares = row.get("shrsOrPrnAmt_sshPrnamt") or row.get("shares")
-                value = row.get("value")
-                name = row.get("nameOfIssuer") or row.get("name", "")
-
+                value = _to_number(_col(row, "Value", "value"))
+                shares = _to_number(_col(row, "SharesPrnAmount", "shares"))
+                ticker = _col(row, "Ticker", "ticker")
                 if value:
-                    total_value += int(value)
+                    total_value += value
 
                 holdings.append({
-                    "company": str(name).strip(),
-                    "cusip": cusip,
+                    "ticker": str(ticker).strip().upper() if ticker else None,
+                    "company": str(_col(row, "Issuer", "nameOfIssuer", "name") or "").strip() or None,
+                    "cusip": str(_col(row, "Cusip", "cusip") or "").strip() or None,
+                    "class": str(_col(row, "Class", "class") or "").strip() or None,
+                    "put_call": _col(row, "PutCall", "putCall") or None,
                     "shares": int(shares) if shares else None,
-                    "value_thousands": int(value) if value else None,
-                    "ticker": None,  # CUSIP → ticker mapping needed
-                })
-        elif hasattr(obj, "holdings"):
-            for h in obj.holdings:
-                holdings.append({
-                    "company": getattr(h, "name", None),
-                    "cusip": getattr(h, "cusip", None),
-                    "shares": getattr(h, "shares", None),
-                    "value_thousands": getattr(h, "value", None),
-                    "ticker": None,
+                    "value_usd": int(value) if value else None,
                 })
 
-        # Sort by value descending
-        holdings.sort(key=lambda h: h.get("value_thousands") or 0, reverse=True)
+        # Aggregate multiple rows for the same issuer (managers often list a
+        # position across several internal accounts).
+        merged: Dict[str, Dict[str, Any]] = {}
+        for h in holdings:
+            key = h.get("cusip") or h.get("ticker") or h.get("company") or id(h)
+            key = f"{key}|{h.get('put_call') or ''}"
+            if key in merged:
+                m = merged[key]
+                m["shares"] = (m.get("shares") or 0) + (h.get("shares") or 0)
+                m["value_usd"] = (m.get("value_usd") or 0) + (h.get("value_usd") or 0)
+            else:
+                merged[key] = dict(h)
+        holdings = list(merged.values())
+        holdings.sort(key=lambda h: h.get("value_usd") or 0, reverse=True)
 
         result = {
             "manager_name": str(company),
             "manager_cik": getattr(company, "cik", None),
             "period": str(getattr(latest, "period_of_report", latest.filing_date)),
             "filing_date": str(latest.filing_date),
-            "total_value_millions": round(total_value / 1000, 1) if total_value else None,
+            "total_value_millions": round(total_value / 1_000_000, 1) if total_value else None,
             "holdings_count": len(holdings),
             "holdings": holdings[:limit],
         }

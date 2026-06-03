@@ -195,6 +195,10 @@ def main():
     serve_parser.add_argument("--host", default="0.0.0.0", help="Host to bind to")
     serve_parser.add_argument("--port", type=int, default=8080, help="Port to bind to")
 
+    # cache
+    cache_parser = subparsers.add_parser("cache", help="Manage the local disk cache")
+    cache_parser.add_argument("action", choices=["clear"], help="Cache action")
+
     # mcp
     mcp_parser = subparsers.add_parser("mcp", help="Start MCP (Model Context Protocol) server")
     mcp_parser.add_argument(
@@ -234,6 +238,12 @@ def main():
             _run(_refresh_institutional())
         elif args.source == "all":
             _run(_refresh_all(from_date, to_date, year))
+
+    elif args.command == "cache":
+        if args.action == "clear":
+            from civicledger.cache import clear_cache
+            n = clear_cache()
+            print(f"Cleared {n} cached file(s)")
 
     elif args.command == "serve":
         from civicledger.api.server import create_app
